@@ -172,6 +172,35 @@ def test_special_characters(xml):
     compare_parsers(xml)
 
 
+@pytest.mark.parametrize(
+    "xml",
+    [
+        "<root><!-- single comment --><item>data</item></root>", # in root
+        "<root><!-- before --><item>data</item><!-- after --></root>", # before and after tag
+        "<root><!-- c1 --><!-- c2 --><item>data</item><!-- c3 --></root>", # multiple comments in a row
+        "<root><a>1</a><!-- between --><b>2</b></root>", # comments between tags
+        "<root><!-- root --><a><!-- a --><b>2</b></a></root>", # comments at different levels of nesting
+        "<root><!-- only comment --></root>", # only comment
+        "<root>before<!-- comment -->after</root>", # comments with text before/after
+        "<root><!-- c1 --><a>1</a><!-- c2 --><b>2</b><!-- c3 --></root>", # multiple comments and tags
+    ]
+)
+def test_process_comments(xml):
+    """Test comment handling with process_comments=True"""
+    compare_parsers(xml, process_comments=True)
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        "<root><!-- single comment --><item>data</item></root>",  # in root
+        "<root><!-- before --><item>data</item><!-- after --></root>",  # before and after tag
+    ]
+)
+def test_ignore_comments(xml):
+    """Test comment handling with process_comments=False"""
+    compare_parsers(xml, process_comments=False)
+
 def test_complex_real_world():
     """Test complex real-world XML structure"""
     xml = '''
