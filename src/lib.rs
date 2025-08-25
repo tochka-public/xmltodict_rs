@@ -221,6 +221,13 @@ impl XmlParser {
             current_text.push(data.to_string());
         }
     }
+
+    fn comment(&self, py: Python, comment: &str) -> PyResult<()> {
+        let Some(parent) = self.stack.last() else { return Ok(()); };
+        let parent_dict = parent.downcast_bound::<PyDict>(py)?;
+        let comment_py = comment.trim().into_pyobject(py)?;
+        self.push_data(py, parent_dict, &self.config.comment_key, &comment_py)
+    }
 }
 
 fn extract_xml_bytes(xml_input: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
@@ -297,9 +304,7 @@ fn parse_xml_with_parser(
                 parser.characters(std::str::from_utf8(e.as_ref())?);
             }
             Ok(Event::Comment(ref e)) if process_comments => {
-                let _comment = String::from_utf8_lossy(e);
-
-                // TODO: implement comment handling
+                parser.comment(py, std::str::from_utf8(e.as_ref())?)?;
             }
             Ok(Event::Eof) => {
                 break;
