@@ -223,7 +223,9 @@ impl XmlParser {
     }
 
     fn comment(&self, py: Python, comment: &str) -> PyResult<()> {
-        let Some(parent) = self.stack.last() else { return Ok(()); };
+        let Some(parent) = self.stack.last() else {
+            return Ok(());
+        };
         let parent_dict = parent.downcast_bound::<PyDict>(py)?;
         let comment_py = comment.trim().into_pyobject(py)?;
         self.push_data(py, parent_dict, &self.config.comment_key, &comment_py)
@@ -474,17 +476,15 @@ impl XmlWriter {
             for (i, item) in list.iter().enumerate() {
                 self.write_element(py, tag, &item, i > 0 || needs_newline)?;
             }
+        } else if let Ok(bool_val) = value.extract::<bool>() {
+            match bool_val {
+                true => write!(&mut self.output, "<{tag}>true</{tag}>").unwrap(),
+                false => write!(&mut self.output, "<{tag}>false</{tag}>").unwrap(),
+            }
         } else {
-            if let Ok(bool_val) = value.extract::<bool>() {
-                match bool_val {
-                    true => write!(&mut self.output, "<{tag}>true</{tag}>").unwrap(),
-                    false => write!(&mut self.output, "<{tag}>false</{tag}>").unwrap(),
-                }
-            } else {
-                let val = value.str()?.to_string();
-                write!(&mut self.output, "<{tag}>{}</{tag}>", escape_xml(&val)).unwrap()
-            };
-        }
+            let val = value.str()?.to_string();
+            write!(&mut self.output, "<{tag}>{}</{tag}>", escape_xml(&val)).unwrap()
+        };
 
         Ok(())
     }

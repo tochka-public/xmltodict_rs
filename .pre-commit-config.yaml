@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: lint-fmt
+        name: lint-fmt
+        entry: just
+        language: system
+        pass_filenames: false
+        always_run: true
