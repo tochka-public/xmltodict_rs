@@ -243,17 +243,6 @@ def test_bytes_vs_string_input():
     assert rust_bytes_result == str_result
 
 
-def test_namespace_ignore():
-    """Test namespace handling when process_namespaces=False"""
-    xml = """
-    <root xmlns="http://example.com/" xmlns:ns="http://ns.com/">
-        <item>data</item>
-        <ns:element>namespaced</ns:element>
-    </root>
-    """
-    compare_parsers(xml, process_namespaces=False)
-
-
 @pytest.mark.parametrize("xml", ERROR_CASES)
 def test_error_cases(xml):
     """Test error handling for malformed XML"""
@@ -486,6 +475,111 @@ class TestForceList:
             rust = xmltodict_rs.parse(xml, force_list=force_list)
             assert rust == original, f"Mismatch for XML: {xml}, force_list: {force_list}"
 
+class TestNamespaces:
+    """Test namespaces functionality"""
+
+    @pytest.fixture()
+    def simple_namespace_xml(self) -> str:
+        return """
+    <root xmlns="http://example.com/" xmlns:ns="http://ns.com/">
+        <item>data</item>
+        <ns:element>namespaced</ns:element>
+    </root>
+    """
+
+    def test_namespace_ignore(self, simple_namespace_xml):
+        """Test namespace handling when process_namespaces=False"""
+        compare_parsers(simple_namespace_xml, process_namespaces=False)
+
+    def test_basic_namespace(self, simple_namespace_xml):
+        """Test basic namespace functionality"""
+
+        compare_parsers(simple_namespace_xml, process_namespaces=True)
+
+    def test_namespace_mapping(self, simple_namespace_xml):
+        """Test namespace mapping functionality"""
+
+        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
+
+        compare_parsers(
+            simple_namespace_xml, process_namespaces=True, namespaces=namespaces
+        )
+
+    def test_namespace_separator(self, simple_namespace_xml):
+        """Test custom namespace separator"""
+
+        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
+
+        compare_parsers(
+            simple_namespace_xml,
+            process_namespaces=True,
+            namespaces=namespaces,
+            namespace_separator="|",
+        )
+
+    def test_nested_namespace(self):
+        """Test nested elements with local namespace declarations"""
+        xml = """
+<root xmlns="http://example.com/">
+    <level1>
+        <level2 xmlns:ns="http://ns.com/">
+            <ns:item>data</ns:item>
+        </level2>
+    </level1>
+</root>
+        """
+        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
+        compare_parsers(xml, process_namespaces=True, namespaces=namespaces)
+
+    def test_override_namespace(self):
+        """Test overriding default namespace at child level"""
+        xml = """
+<root xmlns="http://example.com/">
+    <child xmlns="http://other.com/">
+        <item>data</item>
+    </child>
+</root>
+        """
+        namespaces = {"http://example.com/": "ex", "http://other.com/": "ot"}
+        compare_parsers(xml, process_namespaces=True, namespaces=namespaces)
+
+    def test_mixed_prefix_elements(self):
+        """Test elements with and without prefixes"""
+        xml = """
+<root xmlns="http://example.com/" xmlns:ns="http://ns.com/">
+    <item>data</item>
+    <ns:item>namespaced</ns:item>
+</root>
+        """
+        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
+        compare_parsers(xml, process_namespaces=True, namespaces=namespaces)
+
+    def test_empty_elements_namespace(self):
+        """Test empty elements with and without namespace"""
+        xml = """
+<root xmlns="http://example.com/">
+    <empty />
+    <ns:empty xmlns:ns="http://ns.com/" />
+</root>
+        """
+        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
+        compare_parsers(xml, process_namespaces=True, namespaces=namespaces)
+
+    def test_custom_separator_deep(self):
+        """Test custom namespace separator in nested elements"""
+        xml = """
+<root xmlns="http://example.com/">
+    <level1>
+        <level2>
+            <item>data</item>
+        </level2>
+    </level1>
+</root>
+        """
+        namespaces = {"http://example.com/": "ex"}
+        compare_parsers(
+            xml, process_namespaces=True, namespaces=namespaces, namespace_separator="|"
+        )
 
 if __name__ == "__main__":
     # Run with pytest
