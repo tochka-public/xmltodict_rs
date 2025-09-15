@@ -154,7 +154,6 @@ impl XmlParser {
         let mut current_ns_map = self.namespace_stack.last().cloned().unwrap_or_default();
 
         let element_dict = PyDict::new(py);
-        let mut new_ns_keys = Vec::new();
 
         if self.config.xml_attribs && !attrs.is_empty() {
             for attr in attrs {
@@ -165,11 +164,9 @@ impl XmlParser {
                     if key == "xmlns" {
                         current_ns_map
                             .insert(DEFAULT_NAMESPACE_NAME.to_string(), value.to_string());
-                        new_ns_keys.push(DEFAULT_NAMESPACE_NAME.to_string());
                         continue;
                     } else if let Some(local) = key.strip_prefix("xmlns:") {
                         current_ns_map.insert(local.to_string(), value.to_string());
-                        new_ns_keys.push(local.to_string());
                         continue;
                     }
                 }
