@@ -475,6 +475,7 @@ class TestForceList:
             rust = xmltodict_rs.parse(xml, force_list=force_list)
             assert rust == original, f"Mismatch for XML: {xml}, force_list: {force_list}"
 
+
 class TestNamespaces:
     """Test namespaces functionality"""
 
@@ -501,9 +502,7 @@ class TestNamespaces:
 
         namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
 
-        compare_parsers(
-            simple_namespace_xml, process_namespaces=True, namespaces=namespaces
-        )
+        compare_parsers(simple_namespace_xml, process_namespaces=True, namespaces=namespaces)
 
     def test_namespace_separator(self, simple_namespace_xml):
         """Test custom namespace separator"""
@@ -580,6 +579,7 @@ class TestNamespaces:
         compare_parsers(
             xml, process_namespaces=True, namespaces=namespaces, namespace_separator="|"
         )
+
 
 if __name__ == "__main__":
     # Run with pytest

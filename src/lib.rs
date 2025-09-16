@@ -170,7 +170,7 @@ impl XmlParser {
                         continue;
                     }
                 }
-                let prefixed_key = format!("{}{}", self.config.attr_prefix, key.to_string());
+                let prefixed_key = format!("{}{key}", self.config.attr_prefix);
                 element_dict.set_item(prefixed_key, value)?;
             }
         }
