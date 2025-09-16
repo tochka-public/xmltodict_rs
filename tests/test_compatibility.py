@@ -182,9 +182,10 @@ def test_special_characters(xml):
         "<root><!-- c1 --><a>1</a><!-- c2 --><b>2</b><!-- c3 --></root>",  # multiple comments and tags
     ],
 )
-def test_process_comments(xml):
+@pytest.mark.parametrize("strip_whitespace", [True, False])
+def test_process_comments(xml, strip_whitespace):
     """Test comment handling with process_comments=True"""
-    compare_parsers(xml, process_comments=True)
+    compare_parsers(xml, process_comments=True, strip_whitespace=strip_whitespace)
 
 
 @pytest.mark.parametrize(

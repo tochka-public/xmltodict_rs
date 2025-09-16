@@ -227,7 +227,11 @@ impl XmlParser {
             return Ok(());
         };
         let parent_dict = parent.downcast_bound::<PyDict>(py)?;
-        let comment_py = comment.trim().into_pyobject(py)?;
+        let comment_py = if self.config.strip_whitespace {
+            comment.trim().into_pyobject(py)?
+        } else {
+            comment.into_pyobject(py)?
+        };
         self.push_data(py, parent_dict, &self.config.comment_key, &comment_py)
     }
 }
