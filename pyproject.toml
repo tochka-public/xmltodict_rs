@@ -16,6 +16,8 @@ dev = [
     "psutil>=7.0.0",
     "pytest>=8.4.1",
     "xmltodict>=0.13.0",
+    "ruff>=0.13.0",
+    "pre-commit>=4.3.0",
 ]
 test = [
     "pytest>=8.0.0",
@@ -25,3 +27,46 @@ test = [
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "C4",
+    "SIM",
+    "ISC",
+    "D",
+    "S",
+    "RUF",
+    "C90",
+]
+ignore = [
+    "E501", # line length handled by formatter
+    "D107", # dockstring in __init__
+    "D101", # dockstrings in public class
+    "D415", # dockstring punctuation
+    "D100", # dockstring in public modules
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101", # asserts are fine in tests
+    "S311", # non-crypto randomness in tests
+    "D",    # ignore docstring requirements in tests
+]
+"**/__init__.py" = [
+    "D104", # package-level docstring optional
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
