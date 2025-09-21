@@ -516,53 +516,57 @@ class TestNamespaces:
             namespace_separator="|",
         )
 
-    def test_nested_namespace(self):
-        """Test nested elements with local namespace declarations"""
-        xml = """
-<root xmlns="http://example.com/">
+    @pytest.mark.parametrize(
+        "xml",
+        [
+            # nested_namespace
+            """
+<root xmlns="http://example.com/"> 
     <level1>
         <level2 xmlns:ns="http://ns.com/">
             <ns:item>data</ns:item>
         </level2>
     </level1>
 </root>
-        """
-        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
-        compare_parsers(xml, process_namespaces=True, namespaces=namespaces)
-
-    def test_override_namespace(self):
-        """Test overriding default namespace at child level"""
-        xml = """
+        """,
+            # override_namespace
+            """
 <root xmlns="http://example.com/">
-    <child xmlns="http://other.com/">
+    <child xmlns="http://ns.com/">
         <item>data</item>
     </child>
 </root>
-        """
-        namespaces = {"http://example.com/": "ex", "http://other.com/": "ot"}
-        compare_parsers(xml, process_namespaces=True, namespaces=namespaces)
-
-    def test_mixed_prefix_elements(self):
-        """Test elements with and without prefixes"""
-        xml = """
-<root xmlns="http://example.com/" xmlns:ns="http://ns.com/">
+        """,
+            # mixed_prefix_elements
+            """
+<root xmlns="http://example.com/"  xmlns:ns="http://ns.com/"  >
     <item>data</item>
     <ns:item>namespaced</ns:item>
 </root>
-        """
-        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
-        compare_parsers(xml, process_namespaces=True, namespaces=namespaces)
-
-    def test_empty_elements_namespace(self):
-        """Test empty elements with and without namespace"""
-        xml = """
+        """,
+            # empty_elements_namespace
+            """
 <root xmlns="http://example.com/">
     <empty />
     <ns:empty xmlns:ns="http://ns.com/" />
 </root>
-        """
+        """,
+        ],
+    )
+    def test_resolve_namespaces(self, xml):
         namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
         compare_parsers(xml, process_namespaces=True, namespaces=namespaces)
+
+    @pytest.mark.parametrize("process_namespaces", [True, False])
+    def test_attrs_names(self, process_namespaces):
+        xml = """
+            <root xmlns:foo="http://example.com/foo" xmlns:bar="http://example.com/bar" bar:attr="1">
+                <item></item>
+                <foo:next_item></foo:next_item>
+            </root>
+            
+        """
+        compare_parsers(xml, process_namespaces=process_namespaces)
 
     def test_custom_separator_deep(self):
         """Test custom namespace separator in nested elements"""

@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyString};
 use quick_xml::events::Event;
+use quick_xml::name::PrefixDeclaration;
 use quick_xml::Reader;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -128,11 +129,9 @@ impl XmlParser {
 
         let ns_map = self.namespace_stack.last().unwrap();
         let ns_sep = &self.config.namespace_separator;
-        let (prefix, name) = if let Some((p, l)) = full_name.split_once(':') {
-            (p, l)
-        } else {
-            (DEFAULT_NAMESPACE_NAME, full_name)
-        };
+        let (prefix, name) = full_name
+            .split_once(':')
+            .unwrap_or((DEFAULT_NAMESPACE_NAME, full_name));
         if let Some(uri) = ns_map.get(prefix) {
             let mapped = self
                 .config
@@ -154,28 +153,70 @@ impl XmlParser {
         let mut current_ns_map = self.namespace_stack.last().cloned().unwrap_or_default();
 
         let element_dict = PyDict::new(py);
+        let mut set_xmlns_item = false;
+        let mut normal_attrs: Vec<(String, String)> = Vec::new();
 
+        // collecting root namespaces to fill attributes correctly
         if self.config.xml_attribs && !attrs.is_empty() {
             for attr in attrs {
-                let key = std::str::from_utf8(attr.key.as_ref())?;
-                let value = std::str::from_utf8(attr.value.as_ref())?;
+                let key = &attr.key;
+                let value = std::str::from_utf8(attr.value.as_ref())?.to_string();
 
                 if self.config.process_namespaces {
-                    if key == "xmlns" {
-                        current_ns_map
-                            .insert(DEFAULT_NAMESPACE_NAME.to_string(), value.to_string());
-                        continue;
-                    } else if let Some(local) = key.strip_prefix("xmlns:") {
-                        current_ns_map.insert(local.to_string(), value.to_string());
+                    if let Some(ns) = key.as_namespace_binding() {
+                        match ns {
+                            PrefixDeclaration::Default => {
+                                current_ns_map
+                                    .insert(DEFAULT_NAMESPACE_NAME.to_string(), value.to_string());
+                            }
+                            PrefixDeclaration::Named(name) => {
+                                let key_string = String::from_utf8(name.to_vec())?;
+                                if !set_xmlns_item {
+                                    set_xmlns_item = self
+                                        .config
+                                        .namespaces
+                                        .as_ref()
+                                        .map_or(true, |m| !m.contains_key(&key_string));
+                                }
+                                current_ns_map.insert(key_string, value.to_string());
+                            }
+                        }
                         continue;
                     }
                 }
-                let prefixed_key = format!("{}{key}", self.config.attr_prefix);
+
+                normal_attrs.push((
+                    String::from_utf8(key.into_inner().to_vec())?,
+                    value.to_string(),
+                ));
+            }
+        }
+
+        // set xmlns dict attr
+        if self.config.xml_attribs && !normal_attrs.is_empty() && set_xmlns_item {
+            let ns_py = PyDict::new(py);
+            for (k, v) in current_ns_map.iter() {
+                ns_py.set_item(k, v)?;
+            }
+            let xmlns_key = format!("{}{}", self.config.attr_prefix, "xmlns");
+            element_dict.set_item(xmlns_key, ns_py)?;
+        }
+
+        self.namespace_stack.push(current_ns_map);
+
+        if self.config.xml_attribs {
+            for (key, value) in normal_attrs.into_iter() {
+                let attr_local_name = if self.config.process_namespaces && key.contains(&self.config.namespace_separator) {
+                    self.build_name(&key)
+                } else {
+                    key
+                };
+
+                let prefixed_key = format!("{}{}", self.config.attr_prefix, attr_local_name);
                 element_dict.set_item(prefixed_key, value)?;
             }
         }
 
-        self.namespace_stack.push(current_ns_map);
         let element_name = if self.config.process_namespaces {
             self.build_name(name)
         } else {
