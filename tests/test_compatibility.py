@@ -585,6 +585,133 @@ class TestNamespaces:
         )
 
 
+class TestPostprocessors:
+    @pytest.fixture(
+        params=[
+            "<root><a>1</a><b>2</b></root>",
+            "<root><item>data</item></root>",
+            "<root><a>1</a><!-- comment --><b>2</b></root>",
+            "<root><a attr='x'>1</a><b>2</b></root>",
+            "<root><c><d>3</d></c></root>",
+            "<a>start<b>middle</b>end</a>",
+        ]
+    )
+    def xml_example(self, request):
+        """Provide various XML examples for postprocessor tests"""
+        return request.param
+
+    def test_change_keys(self, xml_example):
+        """Postprocessor changes key names"""
+
+        def post(path, key, value):
+            return f"new_{key}", value
+
+        compare_parsers(xml_example, postprocessor=post)
+
+    def test_change_values(self, xml_example):
+        """Postprocessor changes values"""
+
+        def post(path, key, value):
+            if isinstance(value, str):
+                return key, value.upper()
+            return key, value
+
+        compare_parsers(xml_example, postprocessor=post)
+
+    def test_skip_element(self, xml_example):
+        """Postprocessor can skip elements"""
+
+        def post(path, key, value):
+            if key == "b":
+                return None
+            return key, value
+
+        compare_parsers(xml_example, postprocessor=post)
+
+    def test_mixed_changes(self, xml_example):
+        """Postprocessor can change keys and values and skip others"""
+
+        def post(path, key, value):
+            if key == "a":
+                return f"{key}_new", f"{value}_new"
+            elif key == "b":
+                return None
+            return key, value
+
+        compare_parsers(xml_example, postprocessor=post)
+
+    def test_with_comments_preserved(self, xml_example):
+        """Postprocessor affects elements but leaves comments unchanged"""
+
+        def post(path, key, value):
+            if key.startswith("#comment"):
+                return key, value
+            return f"{key}_x", value
+
+        compare_parsers(xml_example, postprocessor=post, process_comments=True)
+
+    def test_various_value_types(self, xml_example):
+        """Postprocessor returns different Python types"""
+
+        def post(path, key, value):
+            if key == "a":
+                return key, int(value)
+            if key == "b":
+                return key, [value]
+            return key, value
+
+        compare_parsers(xml_example, postprocessor=post)
+
+    def test_exception_propagation(self):
+        """Postprocessor exceptions propagate"""
+        xml = "<root><a>1</a><b>2</b></root>"
+
+        def post(path, key, value):
+            if key == "b":
+                raise ValueError("Intentional error")
+            return key, value
+
+        with pytest.raises(ValueError, match="Intentional error"):
+            xmltodict_rs.parse(xml, postprocessor=post)
+
+    @pytest.fixture
+    def xml_with_attributes(self):
+        return "<root><item id='1' name='test'>value</item></root>"
+
+    def test_postprocessor_change_attribute_keys(self, xml_with_attributes):
+        """Postprocessor changes attribute keys"""
+
+        def post(path, key, value):
+            if isinstance(value, dict):
+                new_value = {f"new_{k}": v for k, v in value.items()}
+                return key, new_value
+            return key, value
+
+        compare_parsers(xml_with_attributes, postprocessor=post)
+
+    def test_postprocessor_change_attribute_values(self, xml_with_attributes):
+        """Postprocessor changes attribute values"""
+
+        def post(path, key, value):
+            if isinstance(value, dict):
+                new_value = {k: str(v).upper() for k, v in value.items()}
+                return key, new_value
+            return key, value
+
+        compare_parsers(xml_with_attributes, postprocessor=post)
+
+    def test_postprocessor_skip_attributes(self, xml_with_attributes):
+        """Postprocessor can remove certain attributes"""
+
+        def post(path, key, value):
+            if isinstance(value, dict):
+                new_value = {k: v for k, v in value.items() if k != "id"}
+                return key, new_value
+            return key, value
+
+        compare_parsers(xml_with_attributes, postprocessor=post)
+
+
 if __name__ == "__main__":
     # Run with pytest
     pytest.main([__file__, "-v"])
