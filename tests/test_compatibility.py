@@ -243,17 +243,6 @@ def test_bytes_vs_string_input():
     assert rust_bytes_result == str_result
 
 
-def test_namespace_ignore():
-    """Test namespace handling when process_namespaces=False"""
-    xml = """
-    <root xmlns="http://example.com/" xmlns:ns="http://ns.com/">
-        <item>data</item>
-        <ns:element>namespaced</ns:element>
-    </root>
-    """
-    compare_parsers(xml, process_namespaces=False)
-
-
 @pytest.mark.parametrize("xml", ERROR_CASES)
 def test_error_cases(xml):
     """Test error handling for malformed XML"""
@@ -485,6 +474,115 @@ class TestForceList:
             original = xmltodict.parse(xml, force_list=force_list)
             rust = xmltodict_rs.parse(xml, force_list=force_list)
             assert rust == original, f"Mismatch for XML: {xml}, force_list: {force_list}"
+
+
+class TestNamespaces:
+    """Test namespaces functionality"""
+
+    @pytest.fixture()
+    def simple_namespace_xml(self) -> str:
+        return """
+    <root xmlns="http://example.com/" xmlns:ns="http://ns.com/">
+        <item>data</item>
+        <ns:element>namespaced</ns:element>
+    </root>
+    """
+
+    def test_namespace_ignore(self, simple_namespace_xml):
+        """Test namespace handling when process_namespaces=False"""
+        compare_parsers(simple_namespace_xml, process_namespaces=False)
+
+    def test_basic_namespace(self, simple_namespace_xml):
+        """Test basic namespace functionality"""
+
+        compare_parsers(simple_namespace_xml, process_namespaces=True)
+
+    def test_namespace_mapping(self, simple_namespace_xml):
+        """Test namespace mapping functionality"""
+
+        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
+
+        compare_parsers(simple_namespace_xml, process_namespaces=True, namespaces=namespaces)
+
+    def test_namespace_separator(self, simple_namespace_xml):
+        """Test custom namespace separator"""
+
+        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
+
+        compare_parsers(
+            simple_namespace_xml,
+            process_namespaces=True,
+            namespaces=namespaces,
+            namespace_separator="|",
+        )
+
+    @pytest.mark.parametrize(
+        "xml",
+        [
+            # nested_namespace
+            """
+<root xmlns="http://example.com/"> 
+    <level1>
+        <level2 xmlns:ns="http://ns.com/">
+            <ns:item>data</ns:item>
+        </level2>
+    </level1>
+</root>
+        """,
+            # override_namespace
+            """
+<root xmlns="http://example.com/">
+    <child xmlns="http://ns.com/">
+        <item>data</item>
+    </child>
+</root>
+        """,
+            # mixed_prefix_elements
+            """
+<root xmlns="http://example.com/"  xmlns:ns="http://ns.com/"  >
+    <item>data</item>
+    <ns:item>namespaced</ns:item>
+</root>
+        """,
+            # empty_elements_namespace
+            """
+<root xmlns="http://example.com/">
+    <empty />
+    <ns:empty xmlns:ns="http://ns.com/" />
+</root>
+        """,
+        ],
+    )
+    def test_resolve_namespaces(self, xml):
+        namespaces = {"http://example.com/": "ex", "http://ns.com/": "ns"}
+        compare_parsers(xml, process_namespaces=True, namespaces=namespaces)
+
+    @pytest.mark.parametrize("process_namespaces", [True, False])
+    def test_attrs_names(self, process_namespaces):
+        xml = """
+            <root xmlns:foo="http://example.com/foo" xmlns:bar="http://example.com/bar" bar:attr="1">
+                <item></item>
+                <foo:next_item></foo:next_item>
+            </root>
+            
+        """
+        compare_parsers(xml, process_namespaces=process_namespaces)
+
+    def test_custom_separator_deep(self):
+        """Test custom namespace separator in nested elements"""
+        xml = """
+<root xmlns="http://example.com/">
+    <level1>
+        <level2>
+            <item>data</item>
+        </level2>
+    </level1>
+</root>
+        """
+        namespaces = {"http://example.com/": "ex"}
+        compare_parsers(
+            xml, process_namespaces=True, namespaces=namespaces, namespace_separator="|"
+        )
 
 
 if __name__ == "__main__":

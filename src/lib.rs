@@ -1,9 +1,13 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyString};
 use quick_xml::events::Event;
+use quick_xml::name::PrefixDeclaration;
 use quick_xml::Reader;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt::Write;
+
+const DEFAULT_NAMESPACE_NAME: &str = "";
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
@@ -20,6 +24,7 @@ pub struct ParseConfig {
     pub comment_key: String,
     pub item_depth: usize,
     pub disable_entities: bool,
+    pub namespaces: Option<HashMap<String, String>>,
 }
 
 impl Default for ParseConfig {
@@ -37,6 +42,7 @@ impl Default for ParseConfig {
             comment_key: "#comment".to_string(),
             item_depth: 0,
             disable_entities: true,
+            namespaces: None,
         }
     }
 }
@@ -47,6 +53,7 @@ pub struct XmlParser {
     stack: Vec<PyObject>,
     path: Vec<String>,
     text_stack: Vec<Vec<String>>,
+    namespace_stack: Vec<HashMap<String, String>>,
 }
 
 impl XmlParser {
@@ -58,6 +65,7 @@ impl XmlParser {
             stack: Vec::new(),
             path: Vec::new(),
             text_stack: Vec::new(),
+            namespace_stack: Vec::new(),
         }
     }
 
@@ -119,14 +127,20 @@ impl XmlParser {
             return full_name.to_string();
         }
 
-        if let Some(sep_pos) = full_name.rfind(&self.config.namespace_separator) {
-            let (namespace, name) = full_name.split_at(sep_pos);
-            let name = &name[self.config.namespace_separator.len()..];
-
-            // TODO: implement namespace resolution logic
-            return format!("{namespace}:{name}");
+        let ns_map = self.namespace_stack.last().unwrap();
+        let ns_sep = &self.config.namespace_separator;
+        let (prefix, name) = full_name
+            .split_once(':')
+            .unwrap_or((DEFAULT_NAMESPACE_NAME, full_name));
+        if let Some(uri) = ns_map.get(prefix) {
+            let mapped = self
+                .config
+                .namespaces
+                .as_ref()
+                .and_then(|m| m.get(uri))
+                .unwrap_or(uri);
+            return format!("{mapped}{ns_sep}{name}");
         }
-
         full_name.to_string()
     }
 
@@ -136,20 +150,83 @@ impl XmlParser {
         name: &str,
         attrs: &[quick_xml::events::attributes::Attribute],
     ) -> PyResult<()> {
-        let element_name = self.build_name(name);
+        let mut current_ns_map = self.namespace_stack.last().cloned().unwrap_or_default();
+
         let element_dict = PyDict::new(py);
+        let mut set_xmlns_item = false;
+        let mut normal_attrs: Vec<(String, String)> = Vec::new();
+
+        // collecting root namespaces to fill attributes correctly
         if self.config.xml_attribs && !attrs.is_empty() {
             for attr in attrs {
-                let key = std::str::from_utf8(attr.key.as_ref())?;
-                let value = std::str::from_utf8(attr.value.as_ref())?;
-                let prefixed_key = format!("{}{}", self.config.attr_prefix, self.build_name(key));
+                let key = &attr.key;
+                let value = std::str::from_utf8(attr.value.as_ref())?.to_string();
+
+                if self.config.process_namespaces {
+                    if let Some(ns) = key.as_namespace_binding() {
+                        match ns {
+                            PrefixDeclaration::Default => {
+                                current_ns_map
+                                    .insert(DEFAULT_NAMESPACE_NAME.to_string(), value.to_string());
+                            }
+                            PrefixDeclaration::Named(name) => {
+                                let key_string = String::from_utf8(name.to_vec())?;
+                                if !set_xmlns_item {
+                                    set_xmlns_item = self
+                                        .config
+                                        .namespaces
+                                        .as_ref()
+                                        .map_or(true, |m| !m.contains_key(&key_string));
+                                }
+                                current_ns_map.insert(key_string, value.to_string());
+                            }
+                        }
+                        continue;
+                    }
+                }
+
+                normal_attrs.push((
+                    String::from_utf8(key.into_inner().to_vec())?,
+                    value.to_string(),
+                ));
+            }
+        }
+
+        // set xmlns dict attr
+        if self.config.xml_attribs && !normal_attrs.is_empty() && set_xmlns_item {
+            let ns_py = PyDict::new(py);
+            for (k, v) in current_ns_map.iter() {
+                ns_py.set_item(k, v)?;
+            }
+            let xmlns_key = format!("{}{}", self.config.attr_prefix, "xmlns");
+            element_dict.set_item(xmlns_key, ns_py)?;
+        }
+
+        self.namespace_stack.push(current_ns_map);
+
+        if self.config.xml_attribs {
+            for (key, value) in normal_attrs.into_iter() {
+                let attr_local_name = if self.config.process_namespaces && key.contains(&self.config.namespace_separator) {
+                    self.build_name(&key)
+                } else {
+                    key
+                };
+
+                let prefixed_key = format!("{}{}", self.config.attr_prefix, attr_local_name);
                 element_dict.set_item(prefixed_key, value)?;
             }
         }
 
+        let element_name = if self.config.process_namespaces {
+            self.build_name(name)
+        } else {
+            name.to_string()
+        };
+
         self.stack.push(element_dict.into());
         self.path.push(element_name);
         self.text_stack.push(Vec::new());
+
         Ok(())
     }
 
@@ -213,6 +290,8 @@ impl XmlParser {
             self.push_data(py, parent_dict, &element_name, final_value.bind(py))?;
         }
 
+        self.namespace_stack.pop();
+
         Ok(())
     }
 
@@ -246,6 +325,28 @@ fn extract_xml_bytes(xml_input: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
             "xml_input must be str or bytes",
         ))
     }
+}
+
+fn extract_hashmap(py: Python, dict_input: PyObject) -> PyResult<HashMap<String, String>> {
+    let dict = dict_input.downcast_bound::<PyDict>(py).map_err(|_| {
+        PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespaces must be a dictionary")
+    })?;
+
+    let mut hashmap = HashMap::with_capacity(dict.len());
+
+    for (key, value) in dict {
+        let key_str = key.downcast::<PyString>().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace keys must be strings")
+        })?;
+
+        let value_str = value.downcast::<PyString>().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace values must be strings")
+        })?;
+
+        hashmap.insert(key_str.to_string(), value_str.to_string());
+    }
+
+    Ok(hashmap)
 }
 
 fn validate_element_name(name: &str) -> PyResult<()> {
@@ -355,7 +456,8 @@ fn parse_xml_with_parser(
     strip_whitespace = true,
     force_list = None,
     item_depth = 0,
-    comment_key = "#comment"
+    comment_key = "#comment",
+    namespaces = None,
 ))]
 fn parse(
     py: Python,
@@ -374,7 +476,12 @@ fn parse(
     force_list: Option<PyObject>,
     item_depth: usize,
     comment_key: &str,
+    namespaces: Option<PyObject>,
 ) -> PyResult<PyObject> {
+    let namespaces_rs = namespaces
+        .map(|dict_py| extract_hashmap(py, dict_py))
+        .transpose()?;
+
     let config = ParseConfig {
         xml_attribs,
         attr_prefix: attr_prefix.to_string(),
@@ -388,6 +495,7 @@ fn parse(
         comment_key: comment_key.to_string(),
         item_depth,
         disable_entities,
+        namespaces: namespaces_rs,
     };
 
     let xml_bytes = extract_xml_bytes(xml_input)?;
