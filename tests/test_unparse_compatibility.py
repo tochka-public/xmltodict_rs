@@ -22,28 +22,38 @@ def compare_unparse(obj: dict, **kwargs) -> None:
     """Compare xmltodict_rs.unparse with xmltodict.unparse"""
     try:
         original = xmltodict.unparse(obj, **kwargs)
-        rust_impl = xmltodict_rs.unparse(obj, **kwargs)
-
-        # Strip headers for comparison if not testing full document
-        if not kwargs.get("full_document", True):
-            original_clean = original
-            rust_clean = rust_impl
-        else:
-            original_clean = _strip(original)
-            rust_clean = _strip(rust_impl)
-
-        assert rust_clean == original_clean, (
-            f"\nObject: {obj!r}\n"
-            f"Kwargs: {kwargs}\n"
-            f"Original: {original!r}\n"
-            f"Rust:     {rust_impl!r}\n"
-            f"Original clean: {original_clean!r}\n"
-            f"Rust clean:     {rust_clean!r}"
-        )
     except Exception as e:
         # If original throws exception, rust should too
         with pytest.raises(type(e)):
             xmltodict_rs.unparse(obj, **kwargs)
+        return
+    rust_impl = xmltodict_rs.unparse(obj, **kwargs)
+
+    # Strip headers for comparison if not testing full document
+    if not kwargs.get("full_document", True):
+        original_clean = original
+        rust_clean = rust_impl
+    else:
+        original_clean = _strip(original)
+        rust_clean = _strip(rust_impl)
+
+    assert rust_clean == original_clean, (
+        f"\nObject: {obj!r}\n"
+        f"Kwargs: {kwargs}\n"
+        f"Original: {original!r}\n"
+        f"Rust:     {rust_impl!r}\n"
+        f"Original clean: {original_clean!r}\n"
+        f"Rust clean:     {rust_clean!r}"
+    )
+
+    print(
+        f"\nObject: {obj!r}\n"
+        f"Kwargs: {kwargs}\n"
+        f"Original: {original!r}\n"
+        f"Rust:     {rust_impl!r}\n"
+        f"Original clean: {original_clean!r}\n"
+        f"Rust clean:     {rust_clean!r}"
+    )
 
 
 def compare_roundtrip(obj: dict, parse_kwargs=None, unparse_kwargs=None) -> None:
@@ -240,3 +250,143 @@ def test_pretty_printing():
     original = clean(xmltodict.unparse(obj, pretty=True))
     rust_impl = clean(xmltodict_rs.unparse(obj, pretty=True))
     assert original == rust_impl
+
+
+class TestPreprocessors:
+    @pytest.fixture(
+        params=[
+            {"root": {"a": "1", "b": "2"}},
+            {"root": {"item": "data"}},
+            {"root": {"a": {"@attr": "x"}, "b": "2"}},
+            {"root": {"c": {"d": "3"}}},
+            {"a": {"b": "inner"}},
+            {"root": {"mixed": {"@id": "1", "child": "X"}}},
+        ]
+    )
+    def data_example(self, request):
+        """Provide various dict structures for unparse tests"""
+        return request.param
+
+    def test_pre_rename_tags(self, data_example):
+        """Preprocessor renames tag names"""
+
+        def pre(key, value):
+            return f"new_{key}", value
+
+        compare_unparse(data_example, preprocessor=pre)
+
+    def test_pre_change_values(self, data_example):
+        """Preprocessor changes values (e.g. uppercasing strings)"""
+
+        def pre(key, value):
+            if isinstance(value, str):
+                return key, value.upper()
+            return key, value
+
+        compare_unparse(data_example, preprocessor=pre)
+
+    def test_pre_skip_element(self, data_example):
+        """Preprocessor can skip elements (return None)"""
+
+        def pre(key, value):
+            if key == "b":
+                return None
+            return key, value
+
+        compare_unparse(data_example, preprocessor=pre)
+
+    def test_pre_mixed_changes(self, data_example):
+        """Preprocessor can rename, change, and skip different parts"""
+
+        def pre(key, value):
+            if key == "a":
+                return f"{key}_new", f"{value}_new" if isinstance(value, str) else value
+            elif key == "b":
+                return None
+            return key, value
+
+        compare_unparse(data_example, preprocessor=pre)
+
+    def test_pre_attr_rename(self, data_example):
+        """Preprocessor renames attribute keys in dict values"""
+
+        def pre(key, value):
+            if isinstance(value, dict):
+                newd = {}
+                for k, v in value.items():
+                    if k.startswith("@"):
+                        newd[f"@new_{k[1:]}"] = v
+                    else:
+                        newd[k] = v
+                return key, newd
+            return key, value
+
+        compare_unparse(data_example, preprocessor=pre)
+
+    def test_pre_attr_value_transform(self, data_example):
+        """Preprocessor changes attribute values (e.g. uppercase)"""
+
+        def pre(key, value):
+            if isinstance(value, dict):
+                newd = {}
+                for k, v in value.items():
+                    if k.startswith("@") and isinstance(v, str):
+                        newd[k] = v.upper()
+                    else:
+                        newd[k] = v
+                return key, newd
+            return key, value
+
+        compare_unparse(data_example, preprocessor=pre)
+
+    def test_pre_skip_attribute(self, data_example):
+        """Preprocessor can omit certain attributes by removing them from dict"""
+
+        def pre(key, value):
+            if isinstance(value, dict):
+                newd = {k: v for k, v in value.items() if not (k.startswith("@") and k[1:] == "id")}
+                return key, newd
+            return key, value
+
+        compare_unparse(data_example, preprocessor=pre)
+
+    def test_pre_raise_exception(self, data_example):
+        """Preprocessor exception should propagate during unparse"""
+
+        def pre(key, value):
+            raise RuntimeError("Pre error")
+
+        compare_unparse(data_example, preprocessor=pre)
+
+    def test_pre_change_none_to_content(self):
+        """Preprocessor can turn None into string content for empty element"""
+        data = {"root": {"tag": None}}
+
+        def pre(key, value):
+            if key == "tag" and value is None:
+                return key, "CONTENT"
+            return key, value
+
+        compare_unparse(data, preprocessor=pre)
+
+    def test_pre_none_to_children(self):
+        """Preprocessor can change empty value into nested dict (children)"""
+        data = {"root": {"tag": None}}
+
+        def pre(key, value):
+            if key == "tag":
+                return key, {"child": "X"}
+            return key, value
+
+        compare_unparse(data, preprocessor=pre)
+
+    def test_pre_none_to_attr(self):
+        """Preprocessor can change empty value into dict with attribute"""
+        data = {"root": {"tag": None}}
+
+        def pre(key, value):
+            if key == "tag":
+                return key, {"@id": "123"}
+            return key, value
+
+        compare_unparse(data, preprocessor=pre)

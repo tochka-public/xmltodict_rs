@@ -12,15 +12,16 @@ def compare_parsers(xml: str, **kwargs) -> None:
     """Compare xmltodict_rs.parse with xmltodict.parse"""
     try:
         original = xmltodict.parse(xml, **kwargs)
-        rust_impl = xmltodict_rs.parse(xml, **kwargs)
-
-        assert rust_impl == original, (
-            f"\nXML: {xml!r}\nKwargs: {kwargs}\nOriginal: {original!r}\nRust:     {rust_impl!r}"
-        )
     except Exception as e:
         # If original throws exception, rust should too
         with pytest.raises(type(e)):
             xmltodict_rs.parse(xml, **kwargs)
+        return
+    rust_impl = xmltodict_rs.parse(xml, **kwargs)
+
+    assert rust_impl == original, (
+        f"\nXML: {xml!r}\nKwargs: {kwargs}\nOriginal: {original!r}\nRust:     {rust_impl!r}"
+    )
 
 
 # Test data for parametrized tests

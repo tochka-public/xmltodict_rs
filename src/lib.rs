@@ -134,9 +134,8 @@ impl XmlParser {
         key: &str,
         data: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let (final_key, final_value) = match self.apply_postprocessor(py, key, data)? {
-            Some((final_key, final_value)) => (final_key, final_value),
-            None => return Ok(()),
+        let Some((final_key, final_value)) = self.apply_postprocessor(py, key, data)? else {
+            return Ok(());
         };
 
         if item.contains(final_key.as_str())? {
@@ -251,13 +250,13 @@ impl XmlParser {
                 };
 
                 let prefixed_key = format!("{}{}", self.config.attr_prefix, attr_local_name);
-                let (final_key, final_value) = match self.apply_postprocessor(
+                let Some((final_key, final_value)) = self.apply_postprocessor(
                     py,
                     prefixed_key.as_str(),
                     value.into_py_any(py)?.bind(py),
-                )? {
-                    Some((final_key, final_value)) => (final_key, final_value),
-                    None => continue,
+                )?
+                else {
+                    continue;
                 };
                 element_dict.set_item(final_key, final_value)?;
             }
@@ -338,11 +337,11 @@ impl XmlParser {
         if self.stack.is_empty() {
             // Root element - create final result
             let result_dict = PyDict::new(py);
-            let (final_key, final_value) =
-                match self.apply_postprocessor(py, element_name.as_str(), final_value.bind(py))? {
-                    Some((final_key, final_value)) => (final_key, final_value),
-                    None => return Ok(()),
-                };
+            let Some((final_key, final_value)) =
+                self.apply_postprocessor(py, element_name.as_str(), final_value.bind(py))?
+            else {
+                return Ok(());
+            };
             result_dict.set_item(final_key, final_value)?;
             self.stack.push(result_dict.into());
         } else {
@@ -593,14 +592,16 @@ struct XmlWriter {
     config: UnparseConfig,
     indent_level: usize,
     output: String,
+    preprocessor: Option<PyObject>,
 }
 
 impl XmlWriter {
-    fn new(config: UnparseConfig) -> Self {
+    fn new(config: UnparseConfig, preprocessor: Option<PyObject>) -> Self {
         Self {
             config,
             indent_level: 0,
             output: String::new(),
+            preprocessor,
         }
     }
 
@@ -625,6 +626,31 @@ impl XmlWriter {
         }
     }
 
+    #[inline]
+    fn apply_preprocessor<'py>(
+        &self,
+        py: Python<'py>,
+        key: &str,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
+        let mut final_key = key.to_string();
+        let mut final_value = data.clone();
+
+        if let Some(proc) = &self.preprocessor {
+            let result = proc.call1(py, (key, data))?;
+
+            if !result.is_none(py) {
+                let tuple = result.bind(py).downcast::<PyTuple>()?;
+                final_key = tuple.get_item(0)?.extract::<String>()?;
+                final_value = tuple.get_item(1)?;
+            } else {
+                return Ok(None);
+            }
+        }
+
+        Ok(Some((final_key, final_value)))
+    }
+
     fn write_element(
         &mut self,
         py: Python,
@@ -632,37 +658,46 @@ impl XmlWriter {
         value: &Bound<'_, PyAny>,
         needs_newline: bool,
     ) -> PyResult<()> {
+        let Some((final_tag, final_value)) = self.apply_preprocessor(py, tag, value)? else {
+            return Ok(());
+        };
+
         if self.config.pretty && needs_newline {
             self.output.push_str(&self.config.newl);
             self.write_indent();
         }
 
         // Check if value is None (empty element)
-        if value.is_none() {
+        if final_value.is_none() {
             if self.config.short_empty_elements {
-                write!(&mut self.output, "<{tag}/>").unwrap();
+                write!(&mut self.output, "<{final_tag}/>").unwrap();
             } else {
-                write!(&mut self.output, "<{tag}></{tag}>").unwrap();
+                write!(&mut self.output, "<{final_tag}></{final_tag}>").unwrap();
             }
             return Ok(());
         }
 
         // Check if value is a dict (element with attributes/children)
-        if let Ok(dict) = value.downcast::<PyDict>() {
-            self.write_dict_element(py, tag, dict)?;
-        } else if let Ok(list) = value.downcast::<PyList>() {
+        if let Ok(dict) = final_value.downcast::<PyDict>() {
+            self.write_dict_element(py, final_tag.as_str(), dict)?;
+        } else if let Ok(list) = final_value.downcast::<PyList>() {
             // Handle lists - create multiple elements with same tag
             for (i, item) in list.iter().enumerate() {
-                self.write_element(py, tag, &item, i > 0 || needs_newline)?;
+                self.write_element(py, final_tag.as_str(), &item, i > 0 || needs_newline)?;
             }
-        } else if let Ok(bool_val) = value.extract::<bool>() {
+        } else if let Ok(bool_val) = final_value.extract::<bool>() {
             match bool_val {
-                true => write!(&mut self.output, "<{tag}>true</{tag}>").unwrap(),
-                false => write!(&mut self.output, "<{tag}>false</{tag}>").unwrap(),
+                true => write!(&mut self.output, "<{final_tag}>true</{final_tag}>").unwrap(),
+                false => write!(&mut self.output, "<{final_tag}>false</{final_tag}>").unwrap(),
             }
         } else {
-            let val = value.str()?.to_string();
-            write!(&mut self.output, "<{tag}>{}</{tag}>", escape_xml(&val)).unwrap()
+            let val = final_value.str()?.to_string();
+            write!(
+                &mut self.output,
+                "<{final_tag}>{}</{final_tag}>",
+                escape_xml(&val)
+            )
+            .unwrap()
         };
 
         Ok(())
@@ -864,7 +899,8 @@ fn escape_xml_attr(text: &str) -> Cow<str> {
     cdata_key = "#text",
     pretty = false,
     newl = "\n",
-    indent = "\t"
+    indent = "\t",
+    preprocessor = None
 ))]
 fn unparse(
     py: Python,
@@ -878,6 +914,7 @@ fn unparse(
     pretty: bool,
     newl: &str,
     indent: &str,
+    preprocessor: Option<PyObject>,
 ) -> PyResult<PyObject> {
     let config = UnparseConfig {
         encoding: encoding.to_string(),
@@ -890,7 +927,7 @@ fn unparse(
         indent: indent.to_string(),
     };
 
-    let mut writer = XmlWriter::new(config);
+    let mut writer = XmlWriter::new(config, preprocessor);
 
     // Validate root elements
     let dict_len = input_dict.len();
