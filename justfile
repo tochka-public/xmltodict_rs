@@ -21,12 +21,12 @@ fmt: fmt-py fmt-rust
 check: fmt lint
 
 dev:
+    uv cache clean
     uv venv --allow-existing
     uv run maturin develop --release
 
 test: dev
     uv run pytest tests/ -v
-
 
 build:
     uv run maturin build --release
@@ -35,4 +35,5 @@ clean:
     cargo clean
     rm -rf dist/
     rm -rf target/wheels/
+    uv cache clean
     uv venv --clear

@@ -213,7 +213,7 @@ impl XmlParser {
                                         .config
                                         .namespaces
                                         .as_ref()
-                                        .map_or(true, |m| !m.contains_key(&key_string));
+                                        .is_none_or(|m| !m.contains_key(&key_string));
                                 }
                                 current_ns_map.insert(key_string, value.to_string());
                             }
@@ -243,7 +243,9 @@ impl XmlParser {
 
         if self.config.xml_attribs {
             for (key, value) in normal_attrs.into_iter() {
-                let attr_local_name = if self.config.process_namespaces && key.contains(&self.config.namespace_separator) {
+                let attr_local_name = if self.config.process_namespaces
+                    && key.contains(&self.config.namespace_separator)
+                {
                     self.build_name(&key)
                 } else {
                     key
