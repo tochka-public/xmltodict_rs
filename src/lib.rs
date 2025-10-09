@@ -50,9 +50,9 @@ impl Default for ParseConfig {
 
 pub struct XmlParser {
     config: ParseConfig,
-    force_list: Option<PyObject>,
-    postprocessor: Option<PyObject>,
-    stack: Vec<PyObject>,
+    force_list: Option<Py<PyAny>>,
+    postprocessor: Option<Py<PyAny>>,
+    stack: Vec<Py<PyAny>>,
     path: Vec<String>,
     text_stack: Vec<Vec<String>>,
     namespace_stack: Vec<HashMap<String, String>>,
@@ -62,8 +62,8 @@ impl XmlParser {
     #[must_use]
     pub fn new(
         config: ParseConfig,
-        force_list: Option<PyObject>,
-        postprocessor: Option<PyObject>,
+        force_list: Option<Py<PyAny>>,
+        postprocessor: Option<Py<PyAny>>,
     ) -> Self {
         Self {
             config,
@@ -391,7 +391,7 @@ fn extract_xml_bytes(xml_input: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     }
 }
 
-fn extract_hashmap(py: Python, dict_input: PyObject) -> PyResult<HashMap<String, String>> {
+fn extract_hashmap(py: Python, dict_input: Py<PyAny>) -> PyResult<HashMap<String, String>> {
     let dict = dict_input.downcast_bound::<PyDict>(py).map_err(|_| {
         PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespaces must be a dictionary")
     })?;
@@ -426,11 +426,11 @@ fn parse_xml_with_parser(
     py: Python,
     xml_bytes: &[u8],
     config: &ParseConfig,
-    force_list: Option<PyObject>,
-    postprocessor: Option<PyObject>,
+    force_list: Option<Py<PyAny>>,
+    postprocessor: Option<Py<PyAny>>,
     strip_whitespace: bool,
     process_comments: bool,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let mut parser = XmlParser::new(config.clone(), force_list, postprocessor);
     let mut reader = Reader::from_reader(xml_bytes);
     reader
@@ -539,12 +539,12 @@ fn parse(
     force_cdata: bool,
     cdata_separator: &str,
     strip_whitespace: bool,
-    force_list: Option<PyObject>,
-    postprocessor: Option<PyObject>,
+    force_list: Option<Py<PyAny>>,
+    postprocessor: Option<Py<PyAny>>,
     item_depth: usize,
     comment_key: &str,
-    namespaces: Option<PyObject>,
-) -> PyResult<PyObject> {
+    namespaces: Option<Py<PyAny>>,
+) -> PyResult<Py<PyAny>> {
     let namespaces_rs = namespaces
         .map(|dict_py| extract_hashmap(py, dict_py))
         .transpose()?;
@@ -594,11 +594,11 @@ struct XmlWriter {
     config: UnparseConfig,
     indent_level: usize,
     output: String,
-    preprocessor: Option<PyObject>,
+    preprocessor: Option<Py<PyAny>>,
 }
 
 impl XmlWriter {
-    fn new(config: UnparseConfig, preprocessor: Option<PyObject>) -> Self {
+    fn new(config: UnparseConfig, preprocessor: Option<Py<PyAny>>) -> Self {
         Self {
             config,
             indent_level: 0,
@@ -916,8 +916,8 @@ fn unparse(
     pretty: bool,
     newl: &str,
     indent: &str,
-    preprocessor: Option<PyObject>,
-) -> PyResult<PyObject> {
+    preprocessor: Option<Py<PyAny>>,
+) -> PyResult<Py<PyAny>> {
     let config = UnparseConfig {
         encoding: encoding.to_string(),
         full_document,
