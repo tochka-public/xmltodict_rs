@@ -10,6 +10,186 @@ use std::fmt::Write;
 
 const DEFAULT_NAMESPACE_NAME: &str = "";
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WellKnownPreprocessor {
+    NilProcessor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WellKnownPostprocessor {
+    NilProcessor,
+}
+
+impl WellKnownPreprocessor {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "nil" => Some(Self::NilProcessor),
+            _ => None,
+        }
+    }
+}
+
+impl WellKnownPostprocessor {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "nil" => Some(Self::NilProcessor),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Preprocessor {
+    None,
+    WellKnown(WellKnownPreprocessor),
+    PyCallable(PyObject),
+}
+
+#[derive(Debug)]
+pub enum Postprocessor {
+    None,
+    WellKnown(WellKnownPostprocessor),
+    PyCallable(PyObject),
+}
+
+impl Preprocessor {
+    pub fn from_py_object(py: Python, obj: Option<PyObject>) -> PyResult<Self> {
+        match obj {
+            None => Ok(Self::None),
+            Some(obj) => {
+                if let Ok(proc_str) = obj.extract::<String>(py) {
+                    // String processor name
+                    if let Some(well_known) = WellKnownPreprocessor::from_name(&proc_str) {
+                        Ok(Self::WellKnown(well_known))
+                    } else {
+                        Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "Unknown preprocessor: '{}'. Available processors: nil",
+                            proc_str
+                        )))
+                    }
+                } else {
+                    // Function processor
+                    Ok(Self::PyCallable(obj))
+                }
+            }
+        }
+    }
+}
+
+impl Clone for Preprocessor {
+    fn clone(&self) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::WellKnown(well_known) => Self::WellKnown(*well_known),
+            Self::PyCallable(obj) => Python::with_gil(|py| Self::PyCallable(obj.clone_ref(py))),
+        }
+    }
+}
+
+impl Clone for Postprocessor {
+    fn clone(&self) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::WellKnown(well_known) => Self::WellKnown(*well_known),
+            Self::PyCallable(obj) => Python::with_gil(|py| Self::PyCallable(obj.clone_ref(py))),
+        }
+    }
+}
+
+impl Postprocessor {
+    pub fn from_py_object(py: Python, obj: Option<PyObject>) -> PyResult<Self> {
+        match obj {
+            None => Ok(Self::None),
+            Some(obj) => {
+                if let Ok(proc_str) = obj.extract::<String>(py) {
+                    if let Some(well_known) = WellKnownPostprocessor::from_name(&proc_str) {
+                        Ok(Self::WellKnown(well_known))
+                    } else {
+                        Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "Unknown postprocessor: '{proc_str}'"
+                        )))
+                    }
+                } else {
+                    Ok(Self::PyCallable(obj))
+                }
+            }
+        }
+    }
+}
+
+fn apply_nil_preprocessor<'py>(
+    py: Python<'py>,
+    key: &str,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
+    // if value.is_none() {
+    //     return Ok(Some((key.to_string(), PyDict::new(py).into_any())));
+    // }
+
+    if let Ok(list) = value.downcast::<PyList>() {
+        let new_list = PyList::empty(py);
+        for item in list.iter() {
+            if let Ok(item_dict) = item.downcast::<PyDict>() {
+                let filtered = PyDict::new(py);
+                for (k, v) in item_dict {
+                    let key_str = k.str()?.to_string();
+                    if !(key_str.starts_with('@') && v.is_none()) {
+                        filtered.set_item(k, v)?;
+                    }
+                }
+                new_list.append(filtered)?;
+            } else {
+                new_list.append(item)?;
+            }
+        }
+        return Ok(Some((key.to_string(), new_list.into_any())));
+    }
+
+    if let Ok(dict) = value.downcast::<PyDict>() {
+        let filtered_dict = PyDict::new(py);
+        for (k, v) in dict {
+            let key_str = k.str()?.to_string();
+            if !(key_str.starts_with('@') && v.is_none()) {
+                filtered_dict.set_item(k, v)?;
+            }
+        }
+        return Ok(Some((key.to_string(), filtered_dict.into_any())));
+    }
+
+    Ok(Some((key.to_string(), value.clone())))
+}
+
+fn apply_nil_postprocessor<'py>(
+    py: Python<'py>,
+    key: &str,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
+    if let Ok(dict) = value.downcast::<PyDict>() {
+        let is_nil = dict.iter().any(|(k, v)| {
+            if let (Ok(key_str), Ok(value_str)) = (k.str(), v.str()) {
+                let key_str = key_str.to_string();
+                let value_str = value_str.to_string();
+
+                // Fast nil check: @<prefix>:nil pattern
+                key_str.len() > 5
+                    && key_str.starts_with('@')
+                    && key_str.ends_with(":nil")
+                    && key_str.contains(':')
+                    && value_str.to_lowercase() == "true"
+            } else {
+                false
+            }
+        });
+
+        if is_nil {
+            let none_bound = py.None().into_any().bind(py).clone();
+            return Ok(Some((key.to_string(), none_bound)));
+        }
+    }
+
+    Ok(Some((key.to_string(), value.clone())))
+}
+
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
 pub struct ParseConfig {
@@ -51,7 +231,7 @@ impl Default for ParseConfig {
 pub struct XmlParser {
     config: ParseConfig,
     force_list: Option<PyObject>,
-    postprocessor: Option<PyObject>,
+    postprocessor: Postprocessor,
     stack: Vec<PyObject>,
     path: Vec<String>,
     text_stack: Vec<Vec<String>>,
@@ -63,7 +243,7 @@ impl XmlParser {
     pub fn new(
         config: ParseConfig,
         force_list: Option<PyObject>,
-        postprocessor: Option<PyObject>,
+        postprocessor: Postprocessor,
     ) -> Self {
         Self {
             config,
@@ -108,23 +288,25 @@ impl XmlParser {
         key: &str,
         data: &Bound<'py, PyAny>,
     ) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
-        let mut final_key = key.to_string();
-        let mut final_value = data.clone();
+        match &self.postprocessor {
+            Postprocessor::None => Ok(Some((key.to_string(), data.clone()))),
+            Postprocessor::WellKnown(well_known) => match well_known {
+                WellKnownPostprocessor::NilProcessor => apply_nil_postprocessor(py, key, data),
+            },
+            Postprocessor::PyCallable(proc) => {
+                let path_list = PyList::new(py, &self.path)?;
+                let result = proc.call1(py, (path_list, key, data))?;
 
-        if let Some(proc) = &self.postprocessor {
-            let path_list = PyList::new(py, &self.path)?;
-            let result = proc.call1(py, (path_list, key, data))?;
-
-            if !result.is_none(py) {
-                let tuple = result.bind(py).downcast::<PyTuple>()?;
-                final_key = tuple.get_item(0)?.extract::<String>()?;
-                final_value = tuple.get_item(1)?;
-            } else {
-                return Ok(None);
+                if !result.is_none(py) {
+                    let tuple = result.bind(py).downcast::<PyTuple>()?;
+                    let final_key = tuple.get_item(0)?.extract::<String>()?;
+                    let final_value = tuple.get_item(1)?;
+                    Ok(Some((final_key, final_value)))
+                } else {
+                    Ok(None)
+                }
             }
         }
-
-        Ok(Some((final_key, final_value)))
     }
 
     fn push_data(
@@ -213,7 +395,7 @@ impl XmlParser {
                                         .config
                                         .namespaces
                                         .as_ref()
-                                        .map_or(true, |m| !m.contains_key(&key_string));
+                                        .is_none_or(|m| !m.contains_key(&key_string));
                                 }
                                 current_ns_map.insert(key_string, value.to_string());
                             }
@@ -243,7 +425,9 @@ impl XmlParser {
 
         if self.config.xml_attribs {
             for (key, value) in normal_attrs.into_iter() {
-                let attr_local_name = if self.config.process_namespaces && key.contains(&self.config.namespace_separator) {
+                let attr_local_name = if self.config.process_namespaces
+                    && key.contains(&self.config.namespace_separator)
+                {
                     self.build_name(&key)
                 } else {
                     key
@@ -425,7 +609,7 @@ fn parse_xml_with_parser(
     xml_bytes: &[u8],
     config: &ParseConfig,
     force_list: Option<PyObject>,
-    postprocessor: Option<PyObject>,
+    postprocessor: Postprocessor,
     strip_whitespace: bool,
     process_comments: bool,
 ) -> PyResult<PyObject> {
@@ -565,6 +749,9 @@ fn parse(
 
     let xml_bytes = extract_xml_bytes(xml_input)?;
 
+    // Create postprocessor from PyObject
+    let postprocessor = Postprocessor::from_py_object(py, postprocessor)?;
+
     let result = parse_xml_with_parser(
         py,
         &xml_bytes,
@@ -592,11 +779,11 @@ struct XmlWriter {
     config: UnparseConfig,
     indent_level: usize,
     output: String,
-    preprocessor: Option<PyObject>,
+    preprocessor: Preprocessor,
 }
 
 impl XmlWriter {
-    fn new(config: UnparseConfig, preprocessor: Option<PyObject>) -> Self {
+    fn new(config: UnparseConfig, preprocessor: Preprocessor) -> Self {
         Self {
             config,
             indent_level: 0,
@@ -633,22 +820,24 @@ impl XmlWriter {
         key: &str,
         data: &Bound<'py, PyAny>,
     ) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
-        let mut final_key = key.to_string();
-        let mut final_value = data.clone();
+        match &self.preprocessor {
+            Preprocessor::None => Ok(Some((key.to_string(), data.clone()))),
+            Preprocessor::WellKnown(well_known) => match well_known {
+                WellKnownPreprocessor::NilProcessor => apply_nil_preprocessor(py, key, data),
+            },
+            Preprocessor::PyCallable(proc) => {
+                let result = proc.call1(py, (key, data))?;
 
-        if let Some(proc) = &self.preprocessor {
-            let result = proc.call1(py, (key, data))?;
-
-            if !result.is_none(py) {
-                let tuple = result.bind(py).downcast::<PyTuple>()?;
-                final_key = tuple.get_item(0)?.extract::<String>()?;
-                final_value = tuple.get_item(1)?;
-            } else {
-                return Ok(None);
+                if !result.is_none(py) {
+                    let tuple = result.bind(py).downcast::<PyTuple>()?;
+                    let final_key = tuple.get_item(0)?.extract::<String>()?;
+                    let final_value = tuple.get_item(1)?;
+                    Ok(Some((final_key, final_value)))
+                } else {
+                    Ok(None)
+                }
             }
         }
-
-        Ok(Some((final_key, final_value)))
     }
 
     fn write_element(
@@ -683,7 +872,23 @@ impl XmlWriter {
         } else if let Ok(list) = final_value.downcast::<PyList>() {
             // Handle lists - create multiple elements with same tag
             for (i, item) in list.iter().enumerate() {
-                self.write_element(py, final_tag.as_str(), &item, i > 0 || needs_newline)?;
+                if let Ok(item_dict) = item.downcast::<PyDict>() {
+                    let filtered = PyDict::new(py);
+                    for (k, v) in item_dict {
+                        let key_str = k.str()?.to_string();
+                        if !(key_str.starts_with(&self.config.attr_prefix) && v.is_none()) {
+                            filtered.set_item(k, v)?;
+                        }
+                    }
+                    self.write_element(
+                        py,
+                        final_tag.as_str(),
+                        &filtered.into_any(),
+                        i > 0 || needs_newline,
+                    )?;
+                } else {
+                    self.write_element(py, final_tag.as_str(), &item, i > 0 || needs_newline)?;
+                }
             }
         } else if let Ok(bool_val) = final_value.extract::<bool>() {
             match bool_val {
@@ -718,6 +923,10 @@ impl XmlWriter {
             let key_str = key.str()?.to_string();
 
             if key_str.starts_with(&self.config.attr_prefix) {
+                // Attribute - skip None values to avoid "None" serialization
+                if value.is_none() {
+                    continue;
+                }
                 // Attribute - handle special Python types
                 let attr_name = &key_str[self.config.attr_prefix.len()..];
                 let attr_value = if let Ok(bool_val) = value.extract::<bool>() {
@@ -729,6 +938,9 @@ impl XmlWriter {
                 } else {
                     value.str()?.to_string()
                 };
+                if attr_value == "None" {
+                    continue;
+                }
                 attributes.push((attr_name.to_string(), attr_value));
             } else if key_str == self.config.cdata_key {
                 // Text content - handle special Python types
@@ -926,6 +1138,9 @@ fn unparse(
         newl: newl.to_string(),
         indent: indent.to_string(),
     };
+
+    // Create preprocessor from PyObject
+    let preprocessor = Preprocessor::from_py_object(py, preprocessor)?;
 
     let mut writer = XmlWriter::new(config, preprocessor);
 
