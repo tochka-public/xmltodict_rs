@@ -31,6 +31,14 @@ test: dev
 build:
     uv run maturin build --release
 
+dev-release:
+    uv cache clean
+    uv venv --allow-existing
+    uv run maturin develop --release
+
+bench: dev-release
+    uv run python benches/accurate_benchmark.py
+
 clean:
     cargo clean
     rm -rf dist/

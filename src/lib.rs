@@ -1,3 +1,4 @@
+use mimalloc::MiMalloc;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyString, PyTuple};
 use pyo3::IntoPyObjectExt;
@@ -7,6 +8,9 @@ use quick_xml::Reader;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 const DEFAULT_NAMESPACE_NAME: &str = "";
 

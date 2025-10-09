@@ -11,6 +11,7 @@ name = "xmltodict_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+mimalloc = "0.1.48"
 pyo3 = { version = "0.26", features = ["extension-module"] }
 quick-xml = { version = "0.31", features = ["serialize"] }
 
