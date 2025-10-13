@@ -5,6 +5,7 @@ This ensures our Rust implementation produces identical results
 
 import pytest
 import xmltodict
+
 import xmltodict_rs
 
 

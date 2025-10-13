@@ -10,6 +10,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
 
+[tool.setuptools]
+# Include type stubs for PEP 561 compliance
+package-data = { "xmltodict_rs" = ["py.typed", "*.pyi"] }
+
 [dependency-groups]
 dev = [
     "maturin>=1.9.3",
@@ -27,6 +31,7 @@ test = [
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+
 
 [tool.ruff]
 line-length = 100
