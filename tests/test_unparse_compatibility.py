@@ -8,6 +8,7 @@ from collections import OrderedDict
 
 import pytest
 import xmltodict
+
 import xmltodict_rs
 
 _HEADER_RE = re.compile(r"^[^\n]*\n")
