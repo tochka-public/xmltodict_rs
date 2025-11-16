@@ -4,6 +4,6 @@ This module provides parse() and unparse() functions for converting between
 XML and Python dictionaries with better performance than pure Python implementations.
 """
 
-from . import parse, unparse
+from .xmltodict_rs import parse, unparse
 
 __all__ = ["parse", "unparse"]
