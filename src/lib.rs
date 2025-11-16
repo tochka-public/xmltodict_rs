@@ -1,3 +1,11 @@
+#[cfg(all(
+    feature = "mimalloc",
+    any(
+        all(target_os = "linux",   target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+        target_os = "macos"
+    )
+))]
 use mimalloc::MiMalloc;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyString, PyTuple};
@@ -9,6 +17,14 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
 
+#[cfg(all(
+    feature = "mimalloc",
+    any(
+        all(target_os = "linux",   target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+        target_os = "macos"
+    )
+))]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 

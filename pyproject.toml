@@ -7,7 +7,7 @@ name = "xmltodict-rs"
 version = "0.1.0"
 description = "High-performance XML to dict conversion library using Rust and PyO3"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = []
 
 [tool.setuptools]
@@ -19,7 +19,7 @@ dev = [
     "maturin>=1.9.3",
     "psutil>=7.0.0",
     "pytest>=8.4.1",
-    "xmltodict>=0.13.0",
+    "xmltodict==0.13.0",
     "ruff>=0.13.0",
     "pre-commit>=4.3.0",
 ]
