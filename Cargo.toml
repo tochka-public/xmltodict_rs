@@ -11,9 +11,12 @@ name = "xmltodict_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-mimalloc = "0.1.48"
-pyo3 = { version = "0.26", features = ["extension-module"] }
+mimalloc = { version = "0.1.48", optional = true }
+pyo3 = { version = "0.26", features = ["extension-module", "generate-import-lib"] }
 quick-xml = { version = "0.31", features = ["serialize"] }
+
+[features]
+default = ["mimalloc"]
 
 [profile.release]
 strip = true
