@@ -4,11 +4,28 @@ build-backend = "maturin"
 
 [project]
 name = "xmltodict-rs"
-version = "0.1.0"
 description = "High-performance XML to dict conversion library using Rust and PyO3"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/tochka-public/xmltodict_rs"
+Repository = "https://github.com/tochka-public/xmltodict_rs"
+Issues = "https://github.com/tochka-public/xmltodict_rs/issues"
 
 [tool.setuptools]
 # Include type stubs for PEP 561 compliance

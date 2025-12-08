@@ -12,6 +12,14 @@ A Rust-based implementation of `xmltodict` that provides significant performance
 -  **Safe** - Built with Rust for memory safety and security
 -  **Easy to Use** - Simple installation and familiar API
 
+## Versioning
+
+The major and minor version numbers of `xmltodict_rs` match those of the original `xmltodict` library. This ensures that the behavior is consistent with the corresponding version of `xmltodict`, making it a true drop-in replacement. Patch versions may differ for Rust-specific fixes and optimizations.
+
+For example:
+- `xmltodict_rs 0.13.x` matches the behavior of `xmltodict 0.13.x`
+- `xmltodict_rs 0.14.x` matches the behavior of `xmltodict 0.14.x`
+
 ## Installation
 
 ```bash
