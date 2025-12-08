@@ -362,7 +362,6 @@ wheels = [
 
 [[package]]
 name = "xmltodict-rs"
-version = "0.1.0"
 source = { editable = "." }
 
 [package.dev-dependencies]
