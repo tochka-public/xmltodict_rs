@@ -234,7 +234,7 @@ checksum = "7264e107f553ccae879d21fbea1d6724ac785e8c3bfc762137959b5802826ef3"
 
 [[package]]
 name = "xmltodict-rs"
-version = "0.1.0"
+version = "0.13.0"
 dependencies = [
  "mimalloc",
  "pyo3",
