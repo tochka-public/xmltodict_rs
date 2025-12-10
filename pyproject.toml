@@ -43,7 +43,7 @@ dev = [
 test = [
     "pytest>=8.0.0",
     "pytest-benchmark>=4.0.0",
-    "xmltodict>=0.13.0",
+    "xmltodict==0.13.0",
 ]
 
 [tool.maturin]

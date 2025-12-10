@@ -52,11 +52,12 @@ jobs:
         shell: bash
         run: |
           set -e
-          python3 -m venv .venv
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          source $HOME/.cargo/env
+          uv venv
           source .venv/bin/activate
-          pip install xmltodict-rs --find-links dist --force-reinstall
-          pip install xmltodict==0.13.0
-          pip install pytest
+          uv pip install xmltodict-rs --find-links dist --force-reinstall
+          uv pip install --group test
           pytest
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
@@ -92,12 +93,12 @@ jobs:
           options: -v ${{ github.workspace }}:/io -w /io
           run: |
             set -e
-            apk add py3-pip py3-virtualenv
-            python3 -m virtualenv .venv
+            wget -qO- https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+            uv venv
             source .venv/bin/activate
-            pip install xmltodict-rs --no-index --find-links dist --force-reinstall
-            pip install xmltodict==0.13.0
-            pip install pytest
+            uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
+            uv pip install --group test
             pytest
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') }}
@@ -107,14 +108,15 @@ jobs:
           distro: alpine_latest
           githubToken: ${{ github.token }}
           install: |
-            apk add py3-virtualenv
+            apk add python3
+            wget -qO- https://astral.sh/uv/install.sh | sh
           run: |
             set -e
-            python3 -m virtualenv .venv
+            export PATH="$HOME/.local/bin:$PATH"
+            uv venv
             source .venv/bin/activate
-            pip install pytest
-            pip install xmltodict==0.13.0
-            pip install xmltodict-rs --find-links dist --force-reinstall
+            uv pip install xmltodict-rs --find-links dist --force-reinstall
+            uv pip install --group test
             pytest
   windows:
     runs-on: ${{ matrix.platform.runner }}
@@ -145,11 +147,12 @@ jobs:
         shell: bash
         run: |
           set -e
-          python3 -m venv .venv
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv venv
           source .venv/Scripts/activate
-          pip install xmltodict-rs --find-links dist --force-reinstall
-          pip install xmltodict==0.13.0
-          pip install pytest
+          uv pip install xmltodict-rs --find-links dist --force-reinstall
+          uv pip install --group test
           pytest
   macos:
     runs-on: ${{ matrix.platform.runner }}
@@ -176,11 +179,12 @@ jobs:
       - name: pytest
         run: |
           set -e
-          python3 -m venv .venv
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          source $HOME/.cargo/env
+          uv venv
           source .venv/bin/activate
-          pip install xmltodict-rs --find-links dist --force-reinstall
-          pip install xmltodict==0.13.0
-          pip install pytest
+          uv pip install xmltodict-rs --find-links dist --force-reinstall
+          uv pip install --group test
           pytest
   sdist:
     runs-on: ubuntu-latest
