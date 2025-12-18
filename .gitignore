@@ -1,2 +1,3 @@
 /target
 .python-version
+*.py[cod]

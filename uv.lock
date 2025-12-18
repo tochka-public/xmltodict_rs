@@ -393,5 +393,5 @@ dev = [
 test = [
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-benchmark", specifier = ">=4.0.0" },
-    { name = "xmltodict", specifier = ">=0.13.0" },
+    { name = "xmltodict", specifier = "==0.13.0" },
 ]

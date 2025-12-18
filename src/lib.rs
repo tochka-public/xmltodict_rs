@@ -1,7 +1,7 @@
 #[cfg(all(
     feature = "mimalloc",
     any(
-        all(target_os = "linux",   target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
         all(target_os = "windows", target_arch = "x86_64"),
         target_os = "macos"
     )
@@ -15,12 +15,11 @@ use quick_xml::name::PrefixDeclaration;
 use quick_xml::Reader;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt::Write;
 
 #[cfg(all(
     feature = "mimalloc",
     any(
-        all(target_os = "linux",   target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
         all(target_os = "windows", target_arch = "x86_64"),
         target_os = "macos"
     )
@@ -135,13 +134,13 @@ impl XmlParser {
             let path_list = PyList::new(py, &self.path)?;
             let result = proc.call1(py, (path_list, key, data))?;
 
-            if !result.is_none(py) {
-                let tuple = result.bind(py).downcast::<PyTuple>()?;
-                final_key = tuple.get_item(0)?.extract::<String>()?;
-                final_value = tuple.get_item(1)?;
-            } else {
+            if result.is_none(py) {
                 return Ok(None);
             }
+
+            let tuple = result.bind(py).downcast::<PyTuple>()?;
+            final_key = tuple.get_item(0)?.extract::<String>()?;
+            final_value = tuple.get_item(1)?;
         }
 
         Ok(Some((final_key, final_value)))
@@ -158,24 +157,25 @@ impl XmlParser {
             return Ok(());
         };
 
-        if item.contains(final_key.as_str())? {
-            // Key exists - convert to list or extend list
-            let existing = item.get_item(final_key.as_str())?.unwrap();
-            if let Ok(list) = existing.downcast::<PyList>() {
-                list.append(data.clone())?;
-            } else {
-                let new_list = PyList::new(py, [existing.clone(), final_value.clone()])?;
-                item.set_item(final_key, &new_list)?;
+        match item.get_item(final_key.as_str())? {
+            Some(existing) => {
+                if let Ok(list) = existing.downcast::<PyList>() {
+                    list.append(data.clone())?;
+                } else {
+                    let new_list = PyList::new(py, [existing.clone(), final_value.clone()])?;
+                    item.set_item(final_key, &new_list)?;
+                }
             }
-        } else {
-            // Key doesn't exist - check force_list
-            if self.should_force_list(py, final_key.as_str(), final_value.as_ref())? {
-                let new_list = PyList::new(py, [final_value.clone()])?;
-                item.set_item(final_key, &new_list)?;
-            } else {
-                item.set_item(final_key, final_value)?;
+            None => {
+                if self.should_force_list(py, final_key.as_str(), final_value.as_ref())? {
+                    let new_list = PyList::new(py, [final_value.clone()])?;
+                    item.set_item(final_key, &new_list)?;
+                } else {
+                    item.set_item(final_key, final_value)?;
+                }
             }
         }
+
         Ok(())
     }
 
@@ -184,7 +184,9 @@ impl XmlParser {
             return full_name.to_string();
         }
 
-        let ns_map = self.namespace_stack.last().unwrap();
+        let Some(ns_map) = self.namespace_stack.last() else {
+            return full_name.to_string();
+        };
         let ns_sep = &self.config.namespace_separator;
         let (prefix, name) = full_name
             .split_once(':')
@@ -213,18 +215,17 @@ impl XmlParser {
         let mut set_xmlns_item = false;
         let mut normal_attrs: Vec<(String, String)> = Vec::new();
 
-        // collecting root namespaces to fill attributes correctly
         if self.config.xml_attribs && !attrs.is_empty() {
             for attr in attrs {
                 let key = &attr.key;
-                let value = std::str::from_utf8(attr.value.as_ref())?.to_string();
+                let value_string = std::str::from_utf8(attr.value.as_ref())?.to_string();
 
                 if self.config.process_namespaces {
                     if let Some(ns) = key.as_namespace_binding() {
                         match ns {
                             PrefixDeclaration::Default => {
                                 current_ns_map
-                                    .insert(DEFAULT_NAMESPACE_NAME.to_string(), value.to_string());
+                                    .insert(DEFAULT_NAMESPACE_NAME.to_string(), value_string);
                             }
                             PrefixDeclaration::Named(name) => {
                                 let key_string = String::from_utf8(name.to_vec())?;
@@ -235,25 +236,21 @@ impl XmlParser {
                                         .as_ref()
                                         .is_none_or(|m| !m.contains_key(&key_string));
                                 }
-                                current_ns_map.insert(key_string, value.to_string());
+                                current_ns_map.insert(key_string, value_string);
                             }
                         }
                         continue;
                     }
                 }
 
-                normal_attrs.push((
-                    String::from_utf8(key.into_inner().to_vec())?,
-                    value.to_string(),
-                ));
+                normal_attrs.push((String::from_utf8(key.into_inner().to_vec())?, value_string));
             }
         }
 
-        // set xmlns dict attr
         if self.config.xml_attribs && !normal_attrs.is_empty() && set_xmlns_item {
             let ns_py = PyDict::new(py);
-            for (k, v) in current_ns_map.iter() {
-                ns_py.set_item(k, v)?;
+            for (key, value) in &current_ns_map {
+                ns_py.set_item(key, value)?;
             }
             let xmlns_key = format!("{}{}", self.config.attr_prefix, "xmlns");
             element_dict.set_item(xmlns_key, ns_py)?;
@@ -262,7 +259,7 @@ impl XmlParser {
         self.namespace_stack.push(current_ns_map);
 
         if self.config.xml_attribs {
-            for (key, value) in normal_attrs.into_iter() {
+            for (key, value) in normal_attrs {
                 let attr_local_name = if self.config.process_namespaces
                     && key.contains(&self.config.namespace_separator)
                 {
@@ -300,12 +297,22 @@ impl XmlParser {
     fn end_element(&mut self, py: Python, name: &str) -> PyResult<()> {
         let element_name = self.build_name(name);
 
-        // Get current element and text
-        let current_element = self.stack.pop().unwrap();
-        let text_parts = self.text_stack.pop().unwrap();
-        self.path.pop();
+        let Some(current_element) = self.stack.pop() else {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "XML parse error: unexpected closing tag",
+            ));
+        };
+        let Some(text_parts) = self.text_stack.pop() else {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "XML parse error: unexpected closing tag",
+            ));
+        };
+        let Some(_) = self.path.pop() else {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "XML parse error: unexpected closing tag",
+            ));
+        };
 
-        // Get text content
         let text_content = if text_parts.is_empty() {
             None
         } else {
@@ -317,47 +324,40 @@ impl XmlParser {
             }
         };
 
-        // Build element value
         let element_dict = current_element.downcast_bound::<PyDict>(py)?;
         let has_attrs = !element_dict.is_empty();
-        let has_text = text_content.is_some();
 
-        let final_value = if !has_attrs && !has_text {
-            // Empty element
-            py.None()
-        } else if !has_attrs && has_text {
-            // Only text
-            let text = text_content.unwrap();
-            if self.config.force_cdata {
-                let dict = PyDict::new(py);
+        let final_value = match (has_attrs, text_content) {
+            (false, None) => py.None(),
+            (false, Some(text)) => {
+                if self.config.force_cdata {
+                    let dict = PyDict::new(py);
+                    if let Some((final_key, final_value)) = self.apply_postprocessor(
+                        py,
+                        &self.config.cdata_key,
+                        text.into_py_any(py)?.bind(py),
+                    )? {
+                        dict.set_item(final_key, final_value)?;
+                    }
+                    dict.into()
+                } else {
+                    text.into_pyobject(py)?.into_any().unbind()
+                }
+            }
+            (true, Some(text)) => {
                 if let Some((final_key, final_value)) = self.apply_postprocessor(
                     py,
                     &self.config.cdata_key,
                     text.into_py_any(py)?.bind(py),
                 )? {
-                    dict.set_item(final_key, final_value)?;
-                };
-                dict.into()
-            } else {
-                text.into_pyobject(py).unwrap().into_any().unbind()
+                    element_dict.set_item(final_key, final_value)?;
+                }
+                current_element
             }
-        } else if has_text {
-            // Attributes + text
-            if let Some((final_key, final_value)) = self.apply_postprocessor(
-                py,
-                &self.config.cdata_key,
-                text_content.into_py_any(py)?.bind(py),
-            )? {
-                element_dict.set_item(final_key, final_value)?
-            };
-            current_element
-        } else {
-            // Only attributes
-            current_element
+            (true, None) => current_element,
         };
 
         if self.stack.is_empty() {
-            // Root element - create final result
             let result_dict = PyDict::new(py);
             let Some((final_key, final_value)) =
                 self.apply_postprocessor(py, element_name.as_str(), final_value.bind(py))?
@@ -367,14 +367,21 @@ impl XmlParser {
             result_dict.set_item(final_key, final_value)?;
             self.stack.push(result_dict.into());
         } else {
-            // Add to parent
-            let parent = self.stack.last().unwrap();
+            let Some(parent) = self.stack.last() else {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "XML parse error: unexpected closing tag",
+                ));
+            };
             let parent_dict = parent.downcast_bound::<PyDict>(py)?;
 
             self.push_data(py, parent_dict, &element_name, final_value.bind(py))?;
         }
 
-        self.namespace_stack.pop();
+        let Some(_) = self.namespace_stack.pop() else {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "XML parse error: unexpected closing tag",
+            ));
+        };
 
         Ok(())
     }
@@ -411,7 +418,7 @@ fn extract_xml_bytes(xml_input: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     }
 }
 
-fn extract_hashmap(py: Python, dict_input: Py<PyAny>) -> PyResult<HashMap<String, String>> {
+fn extract_hashmap(py: Python, dict_input: &Py<PyAny>) -> PyResult<HashMap<String, String>> {
     let dict = dict_input.downcast_bound::<PyDict>(py).map_err(|_| {
         PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespaces must be a dictionary")
     })?;
@@ -566,7 +573,7 @@ fn parse(
     namespaces: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let namespaces_rs = namespaces
-        .map(|dict_py| extract_hashmap(py, dict_py))
+        .map(|dict_py| extract_hashmap(py, &dict_py))
         .transpose()?;
 
     let config = ParseConfig {
@@ -629,13 +636,9 @@ impl XmlWriter {
 
     fn write_header(&mut self) {
         if self.config.full_document {
-            write!(
-                &mut self.output,
-                r#"<?xml version="1.0" encoding="{}"?>"#,
-                self.config.encoding
-            )
-            .unwrap();
-            // Always add newline after XML declaration (not just for pretty printing)
+            self.output.push_str(r#"<?xml version="1.0" encoding=""#);
+            self.output.push_str(&self.config.encoding);
+            self.output.push_str(r#""?>"#);
             self.output.push_str(&self.config.newl);
         }
     }
@@ -661,13 +664,13 @@ impl XmlWriter {
         if let Some(proc) = &self.preprocessor {
             let result = proc.call1(py, (key, data))?;
 
-            if !result.is_none(py) {
-                let tuple = result.bind(py).downcast::<PyTuple>()?;
-                final_key = tuple.get_item(0)?.extract::<String>()?;
-                final_value = tuple.get_item(1)?;
-            } else {
+            if result.is_none(py) {
                 return Ok(None);
             }
+
+            let tuple = result.bind(py).downcast::<PyTuple>()?;
+            final_key = tuple.get_item(0)?.extract::<String>()?;
+            final_value = tuple.get_item(1)?;
         }
 
         Ok(Some((final_key, final_value)))
@@ -692,9 +695,15 @@ impl XmlWriter {
         // Check if value is None (empty element)
         if final_value.is_none() {
             if self.config.short_empty_elements {
-                write!(&mut self.output, "<{final_tag}/>").unwrap();
+                self.output.push('<');
+                self.output.push_str(final_tag.as_str());
+                self.output.push_str("/>");
             } else {
-                write!(&mut self.output, "<{final_tag}></{final_tag}>").unwrap();
+                self.output.push('<');
+                self.output.push_str(final_tag.as_str());
+                self.output.push_str("></");
+                self.output.push_str(final_tag.as_str());
+                self.output.push('>');
             }
             return Ok(());
         }
@@ -703,24 +712,28 @@ impl XmlWriter {
         if let Ok(dict) = final_value.downcast::<PyDict>() {
             self.write_dict_element(py, final_tag.as_str(), dict)?;
         } else if let Ok(list) = final_value.downcast::<PyList>() {
-            // Handle lists - create multiple elements with same tag
             for (i, item) in list.iter().enumerate() {
                 self.write_element(py, final_tag.as_str(), &item, i > 0 || needs_newline)?;
             }
         } else if let Ok(bool_val) = final_value.extract::<bool>() {
-            match bool_val {
-                true => write!(&mut self.output, "<{final_tag}>true</{final_tag}>").unwrap(),
-                false => write!(&mut self.output, "<{final_tag}>false</{final_tag}>").unwrap(),
-            }
+            let bool_text = if bool_val { "true" } else { "false" };
+            self.output.push('<');
+            self.output.push_str(final_tag.as_str());
+            self.output.push('>');
+            self.output.push_str(bool_text);
+            self.output.push_str("</");
+            self.output.push_str(final_tag.as_str());
+            self.output.push('>');
         } else {
             let val = final_value.str()?.to_string();
-            write!(
-                &mut self.output,
-                "<{final_tag}>{}</{final_tag}>",
-                escape_xml(&val)
-            )
-            .unwrap()
-        };
+            self.output.push('<');
+            self.output.push_str(final_tag.as_str());
+            self.output.push('>');
+            self.output.push_str(escape_xml(&val).as_ref());
+            self.output.push_str("</");
+            self.output.push_str(final_tag.as_str());
+            self.output.push('>');
+        }
 
         Ok(())
     }
@@ -735,13 +748,10 @@ impl XmlWriter {
         let mut text_content = None;
         let mut child_elements = Vec::new();
 
-        // Separate attributes, text content, and child elements
         for (key, value) in dict {
             let key_str = key.str()?.to_string();
 
-            if key_str.starts_with(&self.config.attr_prefix) {
-                // Attribute - handle special Python types
-                let attr_name = &key_str[self.config.attr_prefix.len()..];
+            if let Some(attr_name) = key_str.strip_prefix(&self.config.attr_prefix) {
                 let attr_value = if let Ok(bool_val) = value.extract::<bool>() {
                     if bool_val {
                         "true".to_string()
@@ -753,7 +763,6 @@ impl XmlWriter {
                 };
                 attributes.push((attr_name.to_string(), attr_value));
             } else if key_str == self.config.cdata_key {
-                // Text content - handle special Python types
                 let text = if let Ok(bool_val) = value.extract::<bool>() {
                     if bool_val {
                         "true".to_string()
@@ -765,25 +774,21 @@ impl XmlWriter {
                 };
                 text_content = Some(text);
             } else {
-                // Child element
                 child_elements.push((key_str, value));
             }
         }
 
-        // Write opening tag with attributes
         self.output.push('<');
         self.output.push_str(tag);
         for (attr_name, attr_value) in attributes {
-            write!(
-                &mut self.output,
-                r#" {attr_name}="{}""#,
-                escape_xml_attr(&attr_value)
-            )
-            .unwrap();
+            self.output.push(' ');
+            self.output.push_str(&attr_name);
+            self.output.push_str("=\"");
+            self.output.push_str(escape_xml_attr(&attr_value).as_ref());
+            self.output.push('"');
         }
 
         if child_elements.is_empty() && text_content.is_none() {
-            // Empty element
             if self.config.short_empty_elements {
                 self.output.push_str("/>");
             } else {
@@ -794,12 +799,10 @@ impl XmlWriter {
         } else {
             self.output.push('>');
 
-            // Write text content if present
             if let Some(text) = text_content {
                 self.output.push_str(&escape_xml(&text));
             }
 
-            // Write child elements
             if !child_elements.is_empty() {
                 self.indent_level += 1;
                 for (i, (child_tag, child_value)) in child_elements.into_iter().enumerate() {
@@ -813,7 +816,6 @@ impl XmlWriter {
                 }
             }
 
-            // Write closing tag
             self.output.push_str("</");
             self.output.push_str(tag);
             self.output.push('>');
@@ -827,19 +829,22 @@ impl XmlWriter {
     }
 }
 
-fn escape_xml(text: &str) -> Cow<str> {
+fn escape_xml(text: &str) -> Cow<'_, str> {
     let mut result: Option<String> = None;
     let mut last_pos = 0;
 
     for (i, ch) in text.char_indices() {
         match ch {
             '&' | '<' | '>' => {
-                if result.is_none() {
-                    let mut s = String::with_capacity(text.len() + 16);
-                    s.push_str(&text[..i]);
-                    result = Some(s);
+                let is_first_escape = result.is_none();
+                let s = result.get_or_insert_with(|| {
+                    let mut output = String::with_capacity(text.len() + 16);
+                    output.push_str(&text[..i]);
+                    output
+                });
+                if !is_first_escape {
+                    s.push_str(&text[last_pos..i]);
                 }
-                let s = result.as_mut().unwrap();
                 match ch {
                     '&' => s.push_str("&amp;"),
                     '<' => s.push_str("&lt;"),
@@ -848,11 +853,7 @@ fn escape_xml(text: &str) -> Cow<str> {
                 }
                 last_pos = i + ch.len_utf8();
             }
-            _ => {
-                if let Some(ref mut s) = result {
-                    s.push(ch);
-                }
-            }
+            _ => {}
         }
     }
 
@@ -867,19 +868,22 @@ fn escape_xml(text: &str) -> Cow<str> {
     }
 }
 
-fn escape_xml_attr(text: &str) -> Cow<str> {
+fn escape_xml_attr(text: &str) -> Cow<'_, str> {
     let mut result: Option<String> = None;
     let mut last_pos = 0;
 
     for (i, ch) in text.char_indices() {
         match ch {
             '&' | '<' | '>' | '"' => {
-                if result.is_none() {
-                    let mut s = String::with_capacity(text.len() + 20);
-                    s.push_str(&text[..i]);
-                    result = Some(s);
+                let is_first_escape = result.is_none();
+                let s = result.get_or_insert_with(|| {
+                    let mut output = String::with_capacity(text.len() + 20);
+                    output.push_str(&text[..i]);
+                    output
+                });
+                if !is_first_escape {
+                    s.push_str(&text[last_pos..i]);
                 }
-                let s = result.as_mut().unwrap();
                 match ch {
                     '&' => s.push_str("&amp;"),
                     '<' => s.push_str("&lt;"),
@@ -889,11 +893,7 @@ fn escape_xml_attr(text: &str) -> Cow<str> {
                 }
                 last_pos = i + ch.len_utf8();
             }
-            _ => {
-                if let Some(ref mut s) = result {
-                    s.push(ch);
-                }
-            }
+            _ => {}
         }
     }
 
@@ -987,4 +987,12 @@ fn xmltodict_rs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", "0.1.0")?;
     m.add("__build_id__", "v2-2024-08-15")?;
     Ok(())
+}
+
+#[test]
+fn test_escape_xml() {
+    assert_eq!(
+        "Start &amp; then &lt; some &gt; text &amp; more &lt; text &gt; end",
+        escape_xml("Start & then < some > text & more < text > end")
+    );
 }

@@ -3,6 +3,7 @@ Special test for whitespace handling in roundtrip scenarios
 """
 
 import xmltodict
+
 import xmltodict_rs
 
 
