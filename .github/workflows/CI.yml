@@ -19,7 +19,25 @@ permissions:
   contents: read
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system deps
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y python3-dev
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.91.0
+          components: clippy,rustfmt
+      - name: cargo fmt
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features
   linux:
+    needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -34,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          python-version: 3.12
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -53,13 +71,15 @@ jobs:
         run: |
           set -e
           curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
           source $HOME/.cargo/env
           uv venv
           source .venv/bin/activate
-          uv pip install xmltodict-rs --find-links dist --force-reinstall
+          uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
           uv pip install --group test
           pytest
   musllinux:
+    needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -72,7 +92,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          python-version: 3.12
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -119,6 +139,7 @@ jobs:
             uv pip install --group test
             pytest
   windows:
+    needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -129,7 +150,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          python-version: 3.12
           architecture: ${{ matrix.platform.target }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -151,21 +172,26 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           uv venv
           source .venv/Scripts/activate
-          uv pip install xmltodict-rs --find-links dist --force-reinstall
+          uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
           uv pip install --group test
           pytest
   macos:
+    needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
         platform:
-          - { runner: macos-14, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
-          - { runner: macos-15, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
+          - { runner: macos-14, target: aarch64, rust_target: aarch64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
+          - { runner: macos-15-intel, target: x86_64, rust_target: x86_64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          python-version: 3.12
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.91.0
+          targets: ${{ matrix.platform.rust_target }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -178,16 +204,19 @@ jobs:
           name: wheels-macos-${{ matrix.platform.target }}
           path: dist
       - name: pytest
+        shell: bash
         run: |
           set -e
           curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
           source $HOME/.cargo/env
           uv venv
           source .venv/bin/activate
-          uv pip install xmltodict-rs --find-links dist --force-reinstall
+          uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
           uv pip install --group test
           pytest
   sdist:
+    needs: [checks]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
