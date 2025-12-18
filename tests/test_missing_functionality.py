@@ -4,6 +4,7 @@ These tests cover functionality not covered by other test files
 """
 
 import pytest
+
 import xmltodict_rs
 
 

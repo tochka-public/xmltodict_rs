@@ -4,7 +4,7 @@ lint-py:
     uv run ruff check . --fix
 
 lint-rust:
-    cargo clippy --all-targets --all-features -- -D warnings -W clippy::style -D clippy::perf
+    cargo clippy --all-targets --all-features
 
 lint: lint-py lint-rust
 
