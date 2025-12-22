@@ -7,14 +7,13 @@
     )
 ))]
 use mimalloc::MiMalloc;
-use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyString, PyTuple};
-use pyo3::IntoPyObjectExt;
-use quick_xml::events::Event;
-use quick_xml::name::PrefixDeclaration;
-use quick_xml::Reader;
-use std::borrow::Cow;
-use std::collections::HashMap;
+use pyo3::{
+    prelude::*,
+    types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyString, PyTuple},
+    IntoPyObjectExt,
+};
+use quick_xml::{events::Event, name::PrefixDeclaration, Reader};
+use std::{borrow::Cow, collections::HashMap, slice::from_raw_parts, str::from_utf8_unchecked};
 
 #[cfg(all(
     feature = "mimalloc",
@@ -829,43 +828,60 @@ impl XmlWriter {
     }
 }
 
+const LT: u8 = b'<';
+const GT: u8 = b'>';
+const AMPERSAND: u8 = b'&';
+
 fn escape_xml(text: &str) -> Cow<'_, str> {
-    let mut result: Option<String> = None;
+    let bytes = text.as_bytes();
+
+    let need_escape = memchr::memchr(AMPERSAND, bytes).is_some()
+        || memchr::memchr(LT, bytes).is_some()
+        || memchr::memchr(GT, bytes).is_some();
+
+    if !need_escape {
+        return Cow::Borrowed(text);
+    }
+
+    let mut i = 0;
     let mut last_pos = 0;
+    let mut result = String::with_capacity(bytes.len() * 6);
 
-    for (i, ch) in text.char_indices() {
-        match ch {
-            '&' | '<' | '>' => {
-                let is_first_escape = result.is_none();
-                let s = result.get_or_insert_with(|| {
-                    let mut output = String::with_capacity(text.len() + 16);
-                    output.push_str(&text[..i]);
-                    output
-                });
-                if !is_first_escape {
-                    s.push_str(&text[last_pos..i]);
+    unsafe {
+        let ptr = bytes.as_ptr();
+
+        while i < bytes.len() {
+            let byte = *ptr.add(i);
+            match byte {
+                AMPERSAND | LT | GT => {
+                    if last_pos < i {
+                        let slice =
+                            from_utf8_unchecked(from_raw_parts(ptr.add(last_pos), i - last_pos));
+                        result.push_str(slice);
+                    }
+
+                    match byte {
+                        AMPERSAND => result.push_str("&amp;"),
+                        LT => result.push_str("&lt;"),
+                        GT => result.push_str("&gt;"),
+                        _ => unreachable!(),
+                    }
+                    last_pos = i + 1;
                 }
-                match ch {
-                    '&' => s.push_str("&amp;"),
-                    '<' => s.push_str("&lt;"),
-                    '>' => s.push_str("&gt;"),
-                    _ => unreachable!(),
-                }
-                last_pos = i + ch.len_utf8();
+                _ => {}
             }
-            _ => {}
+            i += 1;
+        }
+
+        if last_pos < bytes.len() {
+            result.push_str(from_utf8_unchecked(from_raw_parts(
+                ptr.add(last_pos),
+                bytes.len() - last_pos,
+            )));
         }
     }
 
-    match result {
-        None => Cow::Borrowed(text),
-        Some(mut s) => {
-            if last_pos < text.len() {
-                s.push_str(&text[last_pos..]);
-            }
-            Cow::Owned(s)
-        }
-    }
+    Cow::Owned(result)
 }
 
 fn escape_xml_attr(text: &str) -> Cow<'_, str> {
