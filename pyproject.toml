@@ -46,10 +46,6 @@ test = [
     "xmltodict==0.13.0",
 ]
 
-[tool.maturin]
-features = ["pyo3/extension-module"]
-
-
 [tool.ruff]
 line-length = 100
 target-version = "py39"
