@@ -832,8 +832,13 @@ const LT: u8 = b'<';
 const GT: u8 = b'>';
 const AMPERSAND: u8 = b'&';
 
+const ESCAPED_AMP: &str = "&amp;";
+const ESCAPED_LT: &str = "&lt;";
+const ESCAPED_GT: &str = "&gt;";
+
 fn escape_xml(text: &str) -> Cow<'_, str> {
     let bytes = text.as_bytes();
+    let len = bytes.len();
 
     let need_escape = memchr::memchr(AMPERSAND, bytes).is_some()
         || memchr::memchr(LT, bytes).is_some()
@@ -845,40 +850,47 @@ fn escape_xml(text: &str) -> Cow<'_, str> {
 
     let mut i = 0;
     let mut last_pos = 0;
-    let mut result = String::with_capacity(bytes.len() * 6);
+    let mut result = String::with_capacity(len * 6);
 
-    unsafe {
-        let ptr = bytes.as_ptr();
+    let ptr = bytes.as_ptr();
 
-        while i < bytes.len() {
-            let byte = *ptr.add(i);
-            match byte {
-                AMPERSAND | LT | GT => {
-                    if last_pos < i {
-                        let slice =
-                            from_utf8_unchecked(from_raw_parts(ptr.add(last_pos), i - last_pos));
-                        result.push_str(slice);
-                    }
-
-                    match byte {
-                        AMPERSAND => result.push_str("&amp;"),
-                        LT => result.push_str("&lt;"),
-                        GT => result.push_str("&gt;"),
-                        _ => unreachable!(),
-                    }
-                    last_pos = i + 1;
+    while i < len {
+        let byte = unsafe {
+            // SAFETY: `ptr` comes from `bytes.as_ptr()` which is valid for reads,
+            // and `i` is bounded by `bytes.len()`, so `ptr.add(i)` is within bounds.
+            *ptr.add(i)
+        };
+        match byte {
+            AMPERSAND | LT | GT => {
+                if last_pos < i {
+                    let slice = unsafe {
+                        // SAFETY: The slice from `last_pos` to `i` is valid UTF-8 because
+                        // it's a subslice of the original `text` which is guaranteed to be valid UTF-8.
+                        from_utf8_unchecked(from_raw_parts(ptr.add(last_pos), i - last_pos))
+                    };
+                    result.push_str(slice);
                 }
-                _ => {}
-            }
-            i += 1;
-        }
 
-        if last_pos < bytes.len() {
-            result.push_str(from_utf8_unchecked(from_raw_parts(
-                ptr.add(last_pos),
-                bytes.len() - last_pos,
-            )));
+                match byte {
+                    AMPERSAND => result.push_str(ESCAPED_AMP),
+                    LT => result.push_str(ESCAPED_LT),
+                    GT => result.push_str(ESCAPED_GT),
+                    _ => unreachable!(),
+                }
+                last_pos = i + 1;
+            }
+            _ => {}
         }
+        i += 1;
+    }
+
+    if last_pos < len {
+        let slice = unsafe {
+            // SAFETY: The slice from `last_pos` to `bytes.len()` is valid UTF-8 because
+            // it's a subslice of the original `text` which is guaranteed to be valid UTF-8.
+            from_utf8_unchecked(from_raw_parts(ptr.add(last_pos), len - last_pos))
+        };
+        result.push_str(slice);
     }
 
     Cow::Owned(result)
