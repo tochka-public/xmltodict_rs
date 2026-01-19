@@ -27,6 +27,7 @@ dev:
 
 test: dev
     uv run pytest tests/ -v
+    cargo test
 
 build:
     uv run maturin build --release

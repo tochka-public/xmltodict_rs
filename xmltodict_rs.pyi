@@ -4,10 +4,13 @@ This module provides a Rust-based implementation of xmltodict functionality
 with full type annotations for better IDE support and type checking.
 """
 
-from collections.abc import Collection
-from typing import Any, Callable
+from collections.abc import Collection, Generator
+from typing import Any, Callable, Protocol
 
-XMLInput = str | bytes
+class SupportsRead(Protocol):
+    def read(self, size: int = ...) -> bytes: ...
+
+XMLInput = str | bytes | SupportsRead | Generator[str | bytes, None, None]
 XMLDict = dict[str, Any]
 PostprocessorFunc = Callable[[list[str], str, Any], tuple[str, Any] | None]
 PreprocessorFunc = Callable[[str, Any], tuple[str, Any] | None]

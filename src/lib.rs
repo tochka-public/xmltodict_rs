@@ -7,13 +7,20 @@
     )
 ))]
 use mimalloc::MiMalloc;
-use pyo3::{
-    prelude::*,
-    types::{PyAny, PyBytes, PyDict, PyList, PyModule, PyString, PyTuple},
-    IntoPyObjectExt,
+
+use pyo3::prelude::*;
+use pyo3::types::{
+    PyAny, PyByteArray, PyBytes, PyDict, PyList, PyMemoryView, PyModule, PyString, PyTuple, PyType,
 };
-use quick_xml::{events::Event, name::PrefixDeclaration, Reader};
-use std::{borrow::Cow, collections::HashMap, slice::from_raw_parts, str::from_utf8_unchecked};
+use pyo3::IntoPyObjectExt;
+use quick_xml::events::Event;
+use quick_xml::name::PrefixDeclaration;
+use quick_xml::Reader;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::io::{self, BufRead, BufReader, Read};
+use std::slice::from_raw_parts;
+use std::str::from_utf8_unchecked;
 
 #[cfg(all(
     feature = "mimalloc",
@@ -297,19 +304,13 @@ impl XmlParser {
         let element_name = self.build_name(name);
 
         let Some(current_element) = self.stack.pop() else {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "XML parse error: unexpected closing tag",
-            ));
+            return Err(expat_error(py, "unexpected closing tag".to_string()));
         };
         let Some(text_parts) = self.text_stack.pop() else {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "XML parse error: unexpected closing tag",
-            ));
+            return Err(expat_error(py, "unexpected closing tag".to_string()));
         };
         let Some(_) = self.path.pop() else {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "XML parse error: unexpected closing tag",
-            ));
+            return Err(expat_error(py, "unexpected closing tag".to_string()));
         };
 
         let text_content = if text_parts.is_empty() {
@@ -367,9 +368,7 @@ impl XmlParser {
             self.stack.push(result_dict.into());
         } else {
             let Some(parent) = self.stack.last() else {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "XML parse error: unexpected closing tag",
-                ));
+                return Err(expat_error(py, "unexpected closing tag".to_string()));
             };
             let parent_dict = parent.downcast_bound::<PyDict>(py)?;
 
@@ -377,9 +376,7 @@ impl XmlParser {
         }
 
         let Some(_) = self.namespace_stack.pop() else {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "XML parse error: unexpected closing tag",
-            ));
+            return Err(expat_error(py, "unexpected closing tag".to_string()));
         };
 
         Ok(())
@@ -405,15 +402,368 @@ impl XmlParser {
     }
 }
 
-fn extract_xml_bytes(xml_input: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
-    if let Ok(s) = xml_input.downcast::<PyString>() {
-        Ok(s.to_string().into_bytes())
-    } else if let Ok(b) = xml_input.downcast::<PyBytes>() {
-        Ok(b.as_bytes().to_vec())
-    } else {
-        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-            "xml_input must be str or bytes",
-        ))
+/// Wrapper to store `PyErr` inside `io::Error` while preserving the original exception type.
+/// `PyErr` is Send but not Sync, so we need unsafe impl Sync.
+/// This is safe because we only access the inner `PyErr` while holding the GIL.
+struct WrappedPyErr(PyErr);
+
+impl std::fmt::Debug for WrappedPyErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("WrappedPyErr").finish()
+    }
+}
+
+impl std::fmt::Display for WrappedPyErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Python::attach(|py| {
+            let msg = self
+                .0
+                .value(py)
+                .str()
+                .and_then(|s| s.extract::<String>())
+                .unwrap_or_else(|_| "Python error".to_string());
+            write!(f, "{msg}")
+        })
+    }
+}
+
+impl std::error::Error for WrappedPyErr {}
+
+// SAFETY: PyErr is Send. We implement Sync because WrappedPyErr is only
+// accessed while holding the GIL (via Python::attach), which provides
+// the necessary synchronization.
+unsafe impl Sync for WrappedPyErr {}
+
+fn pyerr_to_io(err: &PyErr) -> io::Error {
+    Python::attach(|py| io::Error::other(WrappedPyErr(err.clone_ref(py))))
+}
+
+fn pyerr_from_io(err: &io::Error) -> Option<PyErr> {
+    err.get_ref()?
+        .downcast_ref::<WrappedPyErr>()
+        .map(|w| Python::attach(|py| w.0.clone_ref(py)))
+}
+
+fn is_generator(py: Python, xml_input: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let types = PyModule::import(py, "types")?;
+    let generator_type = types.getattr("GeneratorType")?;
+    xml_input.is_instance(&generator_type)
+}
+
+#[derive(Default)]
+struct PendingBytes {
+    buf: Vec<u8>,
+    offset: usize,
+}
+
+impl PendingBytes {
+    fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.offset)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.remaining() == 0
+    }
+
+    fn clear(&mut self) {
+        self.buf.clear();
+        self.offset = 0;
+    }
+
+    fn fill_from_slice(&mut self, bytes: &[u8]) {
+        self.buf.clear();
+        self.buf.extend_from_slice(bytes);
+        self.offset = 0;
+    }
+
+    fn copy_into(&mut self, out: &mut [u8]) -> usize {
+        let Some(remaining) = self.buf.get(self.offset..) else {
+            self.clear();
+            return 0;
+        };
+
+        let to_copy = remaining.len().min(out.len());
+        let Some(dst) = out.get_mut(..to_copy) else {
+            return 0;
+        };
+        let Some(src) = remaining.get(..to_copy) else {
+            return 0;
+        };
+        dst.copy_from_slice(src);
+        self.offset = self.offset.saturating_add(to_copy);
+        if self.offset >= self.buf.len() {
+            self.clear();
+        }
+        to_copy
+    }
+}
+
+struct PyFileLikeRead {
+    file_like: Py<PyAny>,
+    pending: PendingBytes,
+    bytearray_buffer: Option<Vec<u8>>,
+}
+
+impl PyFileLikeRead {
+    fn new(file_like: Py<PyAny>) -> Self {
+        Self {
+            file_like,
+            pending: PendingBytes::default(),
+            bytearray_buffer: None,
+        }
+    }
+}
+
+impl Read for PyFileLikeRead {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+
+        if !self.pending.is_empty() {
+            return Ok(self.pending.copy_into(out));
+        }
+
+        Python::attach(|py| {
+            let file_like = self.file_like.bind(py);
+            let chunk = match file_like.call_method1("read", (out.len(),)) {
+                Ok(chunk) => chunk,
+                Err(err) => return Err(pyerr_to_io(&err)),
+            };
+
+            let bytes = if let Ok(chunk_bytes) = chunk.downcast::<PyBytes>() {
+                chunk_bytes.as_bytes()
+            } else if let Ok(chunk_bytearray) = chunk.downcast::<PyByteArray>() {
+                self.bytearray_buffer = Some(chunk_bytearray.to_vec());
+                if let Some(bytes_ref) = self.bytearray_buffer.as_deref() {
+                    bytes_ref
+                } else {
+                    return Err(pyerr_to_io(
+                        &PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                            "read() did not return a bytes object (type=bytearray)",
+                        ),
+                    ));
+                }
+            } else {
+                let type_name = chunk
+                    .get_type()
+                    .name()
+                    .and_then(|n| n.extract::<String>())
+                    .unwrap_or_else(|_| "unknown".to_string());
+                return Err(pyerr_to_io(
+                    &PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                        "read() did not return a bytes object (type={type_name})"
+                    )),
+                ));
+            };
+
+            if bytes.is_empty() {
+                return Ok(0);
+            }
+
+            if bytes.len() <= out.len() {
+                let Some(dst) = out.get_mut(..bytes.len()) else {
+                    return Err(io::Error::other("Internal buffer error"));
+                };
+                dst.copy_from_slice(bytes);
+                return Ok(bytes.len());
+            }
+
+            let out_len = out.len();
+            let Some(src) = bytes.get(..out_len) else {
+                return Err(io::Error::other("Internal buffer error"));
+            };
+            out.copy_from_slice(src);
+            let Some(rest) = bytes.get(out_len..) else {
+                return Err(io::Error::other("Internal buffer error"));
+            };
+            self.pending.fill_from_slice(rest);
+            Ok(out.len())
+        })
+    }
+}
+
+struct PyGeneratorRead {
+    generator: Py<PyAny>,
+    pending: PendingBytes,
+    done: bool,
+    bytearray_buffer: Option<Vec<u8>>,
+}
+
+impl PyGeneratorRead {
+    fn new(generator: Py<PyAny>) -> Self {
+        Self {
+            generator,
+            pending: PendingBytes::default(),
+            done: false,
+            bytearray_buffer: None,
+        }
+    }
+
+    fn next_non_empty_chunk<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> io::Result<Option<Bound<'py, PyAny>>> {
+        while !self.done {
+            let generator = self.generator.bind(py);
+            let chunk = match generator.call_method0("__next__") {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
+                        self.done = true;
+                        return Ok(None);
+                    }
+                    return Err(pyerr_to_io(&err));
+                }
+            };
+
+            if chunk.is_none() {
+                return Err(pyerr_to_io(
+                    &PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                        "a bytes-like object or str is required, not 'NoneType'",
+                    ),
+                ));
+            }
+
+            if let Ok(chunk_str) = chunk.downcast::<PyString>() {
+                if !chunk_str
+                    .to_str()
+                    .map_err(|err| pyerr_to_io(&err))?
+                    .is_empty()
+                {
+                    return Ok(Some(chunk));
+                }
+                continue;
+            }
+
+            if let Ok(chunk_bytes) = chunk.downcast::<PyBytes>() {
+                if !chunk_bytes.as_bytes().is_empty() {
+                    return Ok(Some(chunk));
+                }
+                continue;
+            }
+
+            if let Ok(chunk_bytearray) = chunk.downcast::<PyByteArray>() {
+                let bytes_vec = chunk_bytearray.to_vec();
+                if !bytes_vec.is_empty() {
+                    self.bytearray_buffer = Some(bytes_vec);
+                    return Ok(Some(chunk));
+                }
+                continue;
+            }
+
+            if let Ok(chunk_memview) = chunk.downcast::<PyMemoryView>() {
+                let bytes_obj = chunk_memview
+                    .call_method0("tobytes")
+                    .map_err(|err| pyerr_to_io(&err))?;
+                let bytes = bytes_obj.downcast::<PyBytes>().map_err(|_| {
+                    pyerr_to_io(&PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                        "a bytes-like object or str is required, not 'memoryview'",
+                    ))
+                })?;
+                if !bytes.as_bytes().is_empty() {
+                    return Ok(Some(bytes_obj));
+                }
+                continue;
+            }
+
+            let bytes = chunk.extract::<&[u8]>().map_err(|err| pyerr_to_io(&err))?;
+            if !bytes.is_empty() {
+                return Ok(Some(chunk));
+            }
+        }
+        Ok(None)
+    }
+}
+
+impl Read for PyGeneratorRead {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+
+        if !self.pending.is_empty() {
+            return Ok(self.pending.copy_into(out));
+        }
+
+        if self.done {
+            return Ok(0);
+        }
+
+        Python::attach(|py| {
+            let Some(chunk) = self.next_non_empty_chunk(py)? else {
+                return Ok(0);
+            };
+
+            if let Ok(chunk_str) = chunk.downcast::<PyString>() {
+                let text = chunk_str.to_str().map_err(|err| pyerr_to_io(&err))?;
+                let bytes = text.as_bytes();
+
+                if bytes.len() <= out.len() {
+                    let Some(dst) = out.get_mut(..bytes.len()) else {
+                        return Err(io::Error::other("Internal buffer error"));
+                    };
+                    dst.copy_from_slice(bytes);
+                    return Ok(bytes.len());
+                }
+
+                let out_len = out.len();
+                let Some(src) = bytes.get(..out_len) else {
+                    return Err(io::Error::other("Internal buffer error"));
+                };
+                out.copy_from_slice(src);
+                let Some(rest) = bytes.get(out_len..) else {
+                    return Err(io::Error::other("Internal buffer error"));
+                };
+                self.pending.fill_from_slice(rest);
+                return Ok(out.len());
+            }
+
+            let bytes = if let Ok(chunk_bytes) = chunk.downcast::<PyBytes>() {
+                chunk_bytes.as_bytes()
+            } else if let Ok(chunk_bytearray) = chunk.downcast::<PyByteArray>() {
+                self.bytearray_buffer = Some(chunk_bytearray.to_vec());
+                if let Some(bytes_ref) = self.bytearray_buffer.as_deref() {
+                    bytes_ref
+                } else {
+                    return Err(pyerr_to_io(
+                        &PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                            "a bytes-like object or str is required, not 'bytearray'",
+                        ),
+                    ));
+                }
+            } else {
+                let type_name = chunk
+                    .get_type()
+                    .name()
+                    .and_then(|n| n.extract::<String>())
+                    .unwrap_or_else(|_| "unknown".to_string());
+                return Err(pyerr_to_io(
+                    &PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                        "a bytes-like object or str is required, not '{type_name}'"
+                    )),
+                ));
+            };
+
+            if bytes.len() <= out.len() {
+                let Some(dst) = out.get_mut(..bytes.len()) else {
+                    return Err(io::Error::other("Internal buffer error"));
+                };
+                dst.copy_from_slice(bytes);
+                return Ok(bytes.len());
+            }
+
+            let out_len = out.len();
+            let Some(src) = bytes.get(..out_len) else {
+                return Err(io::Error::other("Internal buffer error"));
+            };
+            out.copy_from_slice(src);
+            let Some(rest) = bytes.get(out_len..) else {
+                return Err(io::Error::other("Internal buffer error"));
+            };
+            self.pending.fill_from_slice(rest);
+            Ok(out.len())
+        })
     }
 }
 
@@ -439,18 +789,50 @@ fn extract_hashmap(py: Python, dict_input: &Py<PyAny>) -> PyResult<HashMap<Strin
     Ok(hashmap)
 }
 
-fn validate_element_name(name: &str) -> PyResult<()> {
+fn expat_error(py: Python, msg: String) -> PyErr {
+    let expat_type = PyModule::import(py, "xml.parsers.expat")
+        .and_then(|m| m.getattr("ExpatError"))
+        .ok()
+        .and_then(|t| t.downcast_into::<PyType>().ok());
+    match expat_type {
+        Some(ty) => PyErr::from_type(ty, msg),
+        None => PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("XML parse error: {msg}")),
+    }
+}
+
+fn validate_element_name(py: Python, name: &str) -> PyResult<()> {
     if name.is_empty() || name.chars().any(|x| matches!(x, '<' | '>')) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "XML parse error: not well-formed (invalid element name)",
+        return Err(expat_error(
+            py,
+            "not well-formed (invalid element name)".to_string(),
         ));
     }
     Ok(())
 }
 
-fn parse_xml_with_parser(
+fn map_quick_xml_error(py: Python, err: quick_xml::Error) -> PyErr {
+    match err {
+        quick_xml::Error::Io(io_err) => {
+            pyerr_from_io(&io_err).unwrap_or_else(|| expat_error(py, io_err.to_string()))
+        }
+        other @ (quick_xml::Error::NonDecodable(_)
+        | quick_xml::Error::UnexpectedEof(_)
+        | quick_xml::Error::EndEventMismatch { .. }
+        | quick_xml::Error::UnexpectedToken(_)
+        | quick_xml::Error::UnexpectedBang(_)
+        | quick_xml::Error::TextNotFound
+        | quick_xml::Error::XmlDeclWithoutVersion(_)
+        | quick_xml::Error::EmptyDocType
+        | quick_xml::Error::InvalidAttr(_)
+        | quick_xml::Error::EscapeError(_)
+        | quick_xml::Error::UnknownPrefix(_)
+        | quick_xml::Error::InvalidPrefixBind { .. }) => expat_error(py, other.to_string()),
+    }
+}
+
+fn parse_xml_with_reader<R: BufRead>(
     py: Python,
-    xml_bytes: &[u8],
+    reader: R,
     config: &ParseConfig,
     force_list: Option<Py<PyAny>>,
     postprocessor: Option<Py<PyAny>>,
@@ -458,8 +840,8 @@ fn parse_xml_with_parser(
     process_comments: bool,
 ) -> PyResult<Py<PyAny>> {
     let mut parser = XmlParser::new(config.clone(), force_list, postprocessor);
-    let mut reader = Reader::from_reader(xml_bytes);
-    reader
+    let mut xml_reader = Reader::from_reader(reader);
+    xml_reader
         .trim_text(strip_whitespace)
         .check_end_names(true)
         .check_comments(true)
@@ -468,34 +850,34 @@ fn parse_xml_with_parser(
     let mut buf = Vec::with_capacity(128);
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 let name = std::str::from_utf8(e.name().into_inner())?;
-                validate_element_name(name)?;
-                let attrs: Vec<_> = e.attributes().collect::<Result<Vec<_>, _>>().map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("XML parse error: {e}"))
-                })?;
+                validate_element_name(py, name)?;
+                let attrs: Vec<_> = e
+                    .attributes()
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| expat_error(py, e.to_string()))?;
                 parser.start_element(py, name, &attrs)?;
             }
             Ok(Event::End(ref e)) => {
                 let name = std::str::from_utf8(e.name().into_inner())?;
-                validate_element_name(name)?;
+                validate_element_name(py, name)?;
                 parser.end_element(py, name)?;
             }
             Ok(Event::Empty(ref e)) => {
                 let name = std::str::from_utf8(e.name().into_inner())?;
-                validate_element_name(name)?;
+                validate_element_name(py, name)?;
 
-                let attrs: Vec<_> = e.attributes().collect::<Result<Vec<_>, _>>().map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("XML parse error: {e}"))
-                })?;
+                let attrs: Vec<_> = e
+                    .attributes()
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| expat_error(py, e.to_string()))?;
                 parser.start_element(py, name, &attrs)?;
                 parser.end_element(py, name)?;
             }
             Ok(Event::Text(ref e)) => {
-                let text = e.unescape().map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("XML parse error: {e}"))
-                })?;
+                let text = e.unescape().map_err(|e| expat_error(py, e.to_string()))?;
                 parser.characters(&text);
             }
             Ok(Event::CData(ref e)) => {
@@ -507,24 +889,23 @@ fn parse_xml_with_parser(
             Ok(Event::Eof) => {
                 break;
             }
-            Err(e) => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "XML parse error: {e}"
-                )));
-            }
+            Err(e) => return Err(map_quick_xml_error(py, e)),
             _ => {}
         }
         buf.clear();
     }
 
+    if !parser.path.is_empty()
+        || !parser.text_stack.is_empty()
+        || !parser.namespace_stack.is_empty()
+    {
+        return Err(expat_error(py, "unclosed element(s) found".to_string()));
+    }
+
     match parser.stack.as_slice() {
         [one] => Ok(one.clone_ref(py)),
-        [] => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "XML parse error: no element found",
-        )),
-        [_, ..] => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "XML parse error: unclosed element(s) found",
-        )),
+        [] => Err(expat_error(py, "no element found".to_string())),
+        [_, ..] => Err(expat_error(py, "unclosed element(s) found".to_string())),
     }
 }
 
@@ -591,18 +972,69 @@ fn parse(
         namespaces: namespaces_rs,
     };
 
-    let xml_bytes = extract_xml_bytes(xml_input)?;
+    if let Ok(xml_str) = xml_input.downcast::<PyString>() {
+        let text = xml_str.to_str()?;
+        return parse_xml_with_reader(
+            py,
+            text.as_bytes(),
+            &config,
+            force_list,
+            postprocessor,
+            strip_whitespace,
+            process_comments,
+        );
+    }
 
-    let result = parse_xml_with_parser(
+    if let Ok(xml_bytes) = xml_input.downcast::<PyBytes>() {
+        return parse_xml_with_reader(
+            py,
+            xml_bytes.as_bytes(),
+            &config,
+            force_list,
+            postprocessor,
+            strip_whitespace,
+            process_comments,
+        );
+    }
+
+    if let Ok(read_attr) = xml_input.getattr("read") {
+        if read_attr.is_callable() {
+            let reader = BufReader::new(PyFileLikeRead::new(xml_input.clone().unbind()));
+            return parse_xml_with_reader(
+                py,
+                reader,
+                &config,
+                force_list,
+                postprocessor,
+                strip_whitespace,
+                process_comments,
+            );
+        }
+    }
+
+    if is_generator(py, xml_input)? {
+        let reader = BufReader::new(PyGeneratorRead::new(xml_input.clone().unbind()));
+        return parse_xml_with_reader(
+            py,
+            reader,
+            &config,
+            force_list,
+            postprocessor,
+            strip_whitespace,
+            process_comments,
+        );
+    }
+
+    let xml_bytes = xml_input.extract::<&[u8]>()?;
+    parse_xml_with_reader(
         py,
-        &xml_bytes,
+        xml_bytes,
         &config,
         force_list,
         postprocessor,
         strip_whitespace,
         process_comments,
-    )?;
-    Ok(result)
+    )
 }
 
 struct UnparseConfig {
