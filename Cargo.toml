@@ -1,6 +1,6 @@
 [package]
 name = "xmltodict-rs"
-version = "0.13.4"
+version = "0.13.5"
 edition = "2021"
 authors = ["Kitaev Roman <802.11g@bk.ru>", "Merkulov Andrey <merander207203@gmail.com>"]
 description = "High-performance XML to dict conversion library using Rust and PyO3"
