@@ -179,6 +179,9 @@ impl XmlParser {
                 .as_ref()
                 .and_then(|m| m.get(uri))
                 .unwrap_or(uri);
+            if mapped.is_empty() {
+                return name.to_string();
+            }
             return format!("{mapped}{ns_sep}{name}");
         }
         full_name.to_string()
@@ -199,7 +202,10 @@ impl XmlParser {
         if self.config.xml_attribs && !attrs.is_empty() {
             for attr in attrs {
                 let key = &attr.key;
-                let value_string = std::str::from_utf8(attr.value.as_ref())?.to_string();
+                let value_string = attr
+                    .unescape_value()
+                    .map_err(|e| expat_error(py, e.to_string()))?
+                    .to_string();
 
                 if self.config.process_namespaces {
                     if let Some(ns) = key.as_namespace_binding() {
@@ -213,11 +219,9 @@ impl XmlParser {
                             PrefixDeclaration::Named(name) => {
                                 let key_string = String::from_utf8(name.to_vec())?;
                                 if !set_xmlns_item {
-                                    set_xmlns_item = self
-                                        .config
-                                        .namespaces
-                                        .as_ref()
-                                        .is_none_or(|m| !m.contains_key(&key_string));
+                                    if let Some(m) = self.config.namespaces.as_ref() {
+                                        set_xmlns_item = !m.contains_key(&value_string);
+                                    }
                                 }
                                 current_ns_map.insert(key_string, value_string);
                             }
@@ -226,11 +230,25 @@ impl XmlParser {
                     }
                 }
 
-                normal_attrs.push((String::from_utf8(key.into_inner().to_vec())?, value_string));
+                let key_str = String::from_utf8(key.into_inner().to_vec())?;
+                if self.config.process_namespaces && !set_xmlns_item && key_str.contains(':') {
+                    if let Some((prefix, _)) = key_str.split_once(':') {
+                        if let Some(uri) = current_ns_map.get(prefix) {
+                            if let Some(m) = self.config.namespaces.as_ref() {
+                                if !m.contains_key(uri) {
+                                    set_xmlns_item = true;
+                                }
+                            } else {
+                                set_xmlns_item = true;
+                            }
+                        }
+                    }
+                }
+                normal_attrs.push((key_str, value_string));
             }
         }
 
-        if self.config.xml_attribs && !normal_attrs.is_empty() && set_xmlns_item {
+        if self.config.xml_attribs && set_xmlns_item {
             let ns_py = PyDict::new(py);
             for (key, value) in &current_ns_map {
                 ns_py.set_item(key, value)?;
