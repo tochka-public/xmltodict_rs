@@ -1,7 +1,7 @@
 use crate::config::UnparseConfig;
 use crate::escape::{escape_xml, escape_xml_attr};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyDict, PyString, PyTuple};
 
 pub struct XmlWriter {
     config: UnparseConfig,
@@ -62,6 +62,33 @@ impl XmlWriter {
         Ok(Some((final_key, final_value)))
     }
 
+    #[inline]
+    fn push_short_empty_tag(output: &mut String, tag: &str) {
+        output.push('<');
+        output.push_str(tag);
+        output.push_str("/>");
+    }
+
+    #[inline]
+    fn push_full_empty_tag(output: &mut String, tag: &str) {
+        output.push('<');
+        output.push_str(tag);
+        output.push_str("></");
+        output.push_str(tag);
+        output.push('>');
+    }
+
+    #[inline]
+    fn push_simple_tag(output: &mut String, tag: &str, value: &str) {
+        output.push('<');
+        output.push_str(tag);
+        output.push('>');
+        output.push_str(value);
+        output.push_str("</");
+        output.push_str(tag);
+        output.push('>');
+    }
+
     pub fn write_element(
         &mut self,
         py: Python,
@@ -81,44 +108,49 @@ impl XmlWriter {
         // Check if value is None (empty element)
         if final_value.is_none() {
             if self.config.short_empty_elements {
-                self.output.push('<');
-                self.output.push_str(final_tag.as_str());
-                self.output.push_str("/>");
+                XmlWriter::push_short_empty_tag(&mut self.output, final_tag.as_str());
             } else {
-                self.output.push('<');
-                self.output.push_str(final_tag.as_str());
-                self.output.push_str("></");
-                self.output.push_str(final_tag.as_str());
-                self.output.push('>');
+                XmlWriter::push_full_empty_tag(&mut self.output, final_tag.as_str());
             }
             return Ok(());
         }
 
         // Check if value is a dict (element with attributes/children)
+        if let Ok(str) = final_value.downcast::<PyString>() {
+            if str.len()? == 0 {
+                if self.config.short_empty_elements {
+                    XmlWriter::push_short_empty_tag(&mut self.output, final_tag.as_str());
+                } else {
+                    XmlWriter::push_full_empty_tag(&mut self.output, final_tag.as_str());
+                }
+            } else {
+                let val = final_value.str()?.to_string();
+                XmlWriter::push_simple_tag(
+                    &mut self.output,
+                    final_tag.as_str(),
+                    escape_xml(&val).as_ref(),
+                );
+            }
+
+            return Ok(());
+        }
+
         if let Ok(dict) = final_value.downcast::<PyDict>() {
             self.write_dict_element(py, final_tag.as_str(), dict)?;
-        } else if let Ok(list) = final_value.downcast::<PyList>() {
-            for (i, item) in list.iter().enumerate() {
-                self.write_element(py, final_tag.as_str(), &item, i > 0 || needs_newline)?;
+        } else if let Ok(iter) = final_value.try_iter() {
+            for (i, item) in iter.enumerate() {
+                self.write_element(py, final_tag.as_str(), &item?, i > 0 || needs_newline)?;
             }
         } else if let Ok(bool_val) = final_value.extract::<bool>() {
             let bool_text = if bool_val { "true" } else { "false" };
-            self.output.push('<');
-            self.output.push_str(final_tag.as_str());
-            self.output.push('>');
-            self.output.push_str(bool_text);
-            self.output.push_str("</");
-            self.output.push_str(final_tag.as_str());
-            self.output.push('>');
+            XmlWriter::push_simple_tag(&mut self.output, final_tag.as_str(), bool_text);
         } else {
             let val = final_value.str()?.to_string();
-            self.output.push('<');
-            self.output.push_str(final_tag.as_str());
-            self.output.push('>');
-            self.output.push_str(escape_xml(&val).as_ref());
-            self.output.push_str("</");
-            self.output.push_str(final_tag.as_str());
-            self.output.push('>');
+            XmlWriter::push_simple_tag(
+                &mut self.output,
+                final_tag.as_str(),
+                escape_xml(&val).as_ref(),
+            );
         }
 
         Ok(())
