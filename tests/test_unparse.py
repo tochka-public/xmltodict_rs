@@ -103,6 +103,46 @@ def test_special_value_objects(obj):
     compare_unparse(obj)
 
 
+@pytest.mark.parametrize(
+    "empty_obj",
+    [
+        None,
+        "",
+        [],
+        {},
+        set(),
+        frozenset(),
+    ],
+)
+def test_empty_objects(empty_obj):
+    obj = {"a": {"b": empty_obj}}
+    compare_unparse(obj)
+
+
+def test_unparse_accepts_generator_of_strings():
+    def gen():
+        yield "1"
+        yield "2"
+        yield ""
+
+    original = xmltodict.unparse({"a": {"b": gen()}})
+    rust_impl = xmltodict_rs.unparse({"a": {"b": gen()}})
+    assert rust_impl == original
+
+
+@pytest.mark.parametrize(
+    "iterator",
+    [
+        {1, 2, 3},
+        frozenset([1, 2, 3, ""]),
+    ],
+)
+def test_iterators(iterator):
+    obj = {"a": {"b": iterator}}
+
+    compare_unparse(obj, short_empty_elements=True)
+
+
 @pytest.mark.parametrize("obj", SIMPLE_OBJECTS[:3])
 def test_short_empty_elements(obj):
     if obj[next(iter(obj.keys()))] is None:
