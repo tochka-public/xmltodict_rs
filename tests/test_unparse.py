@@ -1,3 +1,4 @@
+import enum
 import re
 from collections import OrderedDict
 
@@ -380,4 +381,28 @@ def test_unparse_integer_value():
 
 def test_unparse_float_value():
     obj = {"root": 3.14}
+    compare_unparse(obj)
+
+
+class Color(str, enum.Enum):
+    RED = "red"
+    BLUE = "blue"
+
+
+class MyStr(str):
+    pass
+
+
+STR_SUBCLASS_OBJECTS = [
+    {"root": Color.RED},
+    {"root": {"@color": Color.RED, "#text": "data"}},
+    {"root": {"#text": Color.RED}},
+    {"root": {"item": [Color.RED, Color.BLUE]}},
+    {"root": MyStr("hello")},
+    {"root": {"@id": MyStr("123"), "#text": "data"}},
+]
+
+
+@pytest.mark.parametrize("obj", STR_SUBCLASS_OBJECTS)
+def test_unparse_str_subclass(obj):
     compare_unparse(obj)

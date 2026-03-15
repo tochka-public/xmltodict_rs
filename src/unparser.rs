@@ -176,6 +176,8 @@ impl XmlWriter {
                     } else {
                         "false".to_string()
                     }
+                } else if let Ok(py_str) = value.downcast::<PyString>() {
+                    py_str.to_str()?.to_string()
                 } else {
                     value.str()?.to_string()
                 };
@@ -187,6 +189,8 @@ impl XmlWriter {
                     } else {
                         "false".to_string()
                     }
+                } else if let Ok(py_str) = value.downcast::<PyString>() {
+                    py_str.to_str()?.to_string()
                 } else {
                     value.str()?.to_string()
                 };
