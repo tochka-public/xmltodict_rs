@@ -15,6 +15,7 @@ mimalloc = { version = "0.1", optional = true, features = ["local_dynamic_tls"] 
 pyo3 = { version = "0.26", features = ["extension-module", "generate-import-lib"] }
 quick-xml = { version = "0.31", features = ["serialize"] }
 memchr  = { version = "2.7", default-features = false }
+encoding_rs = "0.8"
 
 [features]
 default = ["mimalloc"]

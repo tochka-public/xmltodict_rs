@@ -9,6 +9,7 @@
 use mimalloc::MiMalloc;
 
 mod config;
+mod encoding;
 mod error;
 mod escape;
 mod parser;
@@ -16,6 +17,7 @@ mod reader;
 mod unparser;
 
 use config::{AttrPrefix, CdataKey, CommentKey, NamespaceSeparator, ParseConfig, UnparseConfig};
+use encoding::decode_bytes_to_utf8;
 use error::{expat_error, map_quick_xml_error, validate_element_name};
 use parser::XmlParser;
 use reader::{PyFileLikeRead, PyGeneratorRead};
@@ -26,7 +28,7 @@ use pyo3::types::{PyBytes, PyDict, PyModule, PyString};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 
 #[cfg(all(
     feature = "mimalloc",
@@ -148,11 +150,12 @@ fn parse_xml_with_reader<R: BufRead>(
 
 /// Parse XML string/bytes into a Python dictionary
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 #[allow(clippy::fn_params_excessive_bools)]
 #[pyfunction]
 #[pyo3(signature = (
     xml_input,
-    _encoding = None,
+    encoding = None,
     process_namespaces = false,
     namespace_separator = ":",
     disable_entities = true,
@@ -172,7 +175,7 @@ fn parse_xml_with_reader<R: BufRead>(
 fn parse(
     py: Python,
     xml_input: &Bound<'_, PyAny>,
-    _encoding: Option<&str>,
+    encoding: Option<&str>,
     process_namespaces: bool,
     namespace_separator: &str,
     disable_entities: bool,
@@ -223,9 +226,10 @@ fn parse(
     }
 
     if let Ok(xml_bytes) = xml_input.downcast::<PyBytes>() {
+        let decoded = decode_bytes_to_utf8(xml_bytes.as_bytes(), encoding)?;
         return parse_xml_with_reader(
             py,
-            xml_bytes.as_bytes(),
+            decoded.as_bytes(),
             &config,
             force_list,
             postprocessor,
@@ -236,6 +240,24 @@ fn parse(
 
     if let Ok(read_attr) = xml_input.getattr("read") {
         if read_attr.is_callable() {
+            if encoding.is_some() {
+                let mut raw = Vec::new();
+                PyFileLikeRead::new(xml_input.clone().unbind())
+                    .read_to_end(&mut raw)
+                    .map_err(|e| {
+                        error::pyerr_from_io(&e).unwrap_or_else(|| expat_error(py, e.to_string()))
+                    })?;
+                let decoded = decode_bytes_to_utf8(&raw, encoding)?;
+                return parse_xml_with_reader(
+                    py,
+                    decoded.as_bytes(),
+                    &config,
+                    force_list,
+                    postprocessor,
+                    strip_whitespace,
+                    process_comments,
+                );
+            }
             let reader = BufReader::new(PyFileLikeRead::new(xml_input.clone().unbind()));
             return parse_xml_with_reader(
                 py,
@@ -250,6 +272,24 @@ fn parse(
     }
 
     if is_generator(py, xml_input)? {
+        if encoding.is_some() {
+            let mut raw = Vec::new();
+            PyGeneratorRead::new(xml_input.clone().unbind())
+                .read_to_end(&mut raw)
+                .map_err(|e| {
+                    error::pyerr_from_io(&e).unwrap_or_else(|| expat_error(py, e.to_string()))
+                })?;
+            let decoded = decode_bytes_to_utf8(&raw, encoding)?;
+            return parse_xml_with_reader(
+                py,
+                decoded.as_bytes(),
+                &config,
+                force_list,
+                postprocessor,
+                strip_whitespace,
+                process_comments,
+            );
+        }
         let reader = BufReader::new(PyGeneratorRead::new(xml_input.clone().unbind()));
         return parse_xml_with_reader(
             py,
@@ -263,9 +303,10 @@ fn parse(
     }
 
     let xml_bytes = xml_input.extract::<&[u8]>()?;
+    let decoded = decode_bytes_to_utf8(xml_bytes, encoding)?;
     parse_xml_with_reader(
         py,
-        xml_bytes,
+        decoded.as_bytes(),
         &config,
         force_list,
         postprocessor,
@@ -342,6 +383,9 @@ fn unparse(
     }
 
     let result = writer.finish();
+
+    // Match original xmltodict: unparse() always returns str,
+    // encoding only affects the XML declaration header
     Ok(result.into_pyobject(py)?.into_any().unbind())
 }
 
