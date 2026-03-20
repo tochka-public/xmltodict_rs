@@ -122,6 +122,14 @@ Based on benchmarks with various XML sizes:
 | Parse     | ~8x faster    | ~6x faster    | ~5x faster    |
 | Unparse   | ~10x faster   | ~8x faster    | ~7x faster    |
 
+10 GB file streaming benchmark:
+
+| Implementation                     |    Throughput |
+|------------------------------------|--------------:|
+| `xmltodict_rs (auto-detect)`       | `724.54 MB/s` |
+| `xmltodict_rs (explicit encoding)` | `751.10 MB/s` |
+| `xmltodict (auto-detect)`          |  `77.54 MB/s` |
+| `xmltodict (explicit encoding)`    |  `77.28 MB/s` |
 
 ## Development
 
@@ -140,6 +148,7 @@ just test
 
 # Run benchmarks
 uv run python benches/accurate_benchmark.py
+uv run python benches/file_stream_benchmark.py --size-gb 10
 ```
 
 ## Contributing

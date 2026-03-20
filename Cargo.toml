@@ -9,6 +9,11 @@ license = "MIT"
 [lib]
 name = "xmltodict_rs"
 crate-type = ["cdylib"]
+# This crate is a Python extension module (PyO3 `extension-module`), so
+# Rust's default lib test/doctest harness tries to link a native test binary
+# against Python C symbols and fails on `cargo test`.
+test = false
+doctest = false
 
 [dependencies]
 mimalloc = { version = "0.1", optional = true, features = ["local_dynamic_tls"]  }

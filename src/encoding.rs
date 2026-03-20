@@ -1,66 +1,44 @@
+use crate::encoding::error::EncodingError;
 use encoding_rs::Encoding;
+use memchr::memmem::Finder;
 use pyo3::prelude::*;
 use std::borrow::Cow;
+use std::sync::LazyLock;
 
-enum XmlBytePrefix {
-    /// UTF-8 BOM: EF BB BF
-    Utf8,
-    /// UTF-16 LE BOM: FF FE
-    Utf16Le,
-    /// UTF-16 BE BOM: FE FF
-    Utf16Be,
-    /// '<' in UTF-16 LE without BOM: 3C 00
-    Utf16LeAngleBracket,
-    /// '<' in UTF-16 BE without BOM: 00 3C
-    Utf16BeAngleBracket,
-}
+pub static XML_DECL_END: LazyLock<Finder<'static>> = LazyLock::new(|| Finder::new(b"?>"));
+static XML_DECL_ENCODING: LazyLock<Finder<'static>> = LazyLock::new(|| Finder::new(b"encoding"));
 
-impl XmlBytePrefix {
-    const ALL: &[Self] = &[
-        Self::Utf8,
-        Self::Utf16Le,
-        Self::Utf16Be,
-        Self::Utf16LeAngleBracket,
-        Self::Utf16BeAngleBracket,
-    ];
+pub fn identify_encoding_from_opening_bytes(data: &[u8]) -> Option<&'static Encoding> {
+    use encoding_rs::{UTF_16BE, UTF_16LE};
 
-    fn bytes(&self) -> &'static [u8] {
-        match self {
-            Self::Utf8 => b"\xEF\xBB\xBF",
-            Self::Utf16Le => b"\xFF\xFE",
-            Self::Utf16Be => b"\xFE\xFF",
-            Self::Utf16LeAngleBracket => b"\x3C\x00",
-            Self::Utf16BeAngleBracket => b"\x00\x3C",
-        }
-    }
-
-    fn encoding(&self) -> &'static Encoding {
-        match self {
-            Self::Utf8 => encoding_rs::UTF_8,
-            Self::Utf16Le | Self::Utf16LeAngleBracket => encoding_rs::UTF_16LE,
-            Self::Utf16Be | Self::Utf16BeAngleBracket => encoding_rs::UTF_16BE,
-        }
+    if let Some((enc, _)) = Encoding::for_bom(data) {
+        Some(enc)
+    } else if data.starts_with(b"\x3C\x00") {
+        // '<' in UTF-16 LE without BOM
+        Some(UTF_16LE)
+    } else if data.starts_with(b"\x00\x3C") {
+        // '<' in UTF-16 BE without BOM
+        Some(UTF_16BE)
+    } else {
+        parse_xml_encoding_declaration(data)
     }
 }
 
-fn detect_encoding_from_bytes(data: &[u8]) -> Option<&'static Encoding> {
-    for sig in XmlBytePrefix::ALL {
-        if data.starts_with(sig.bytes()) {
-            return Some(sig.encoding());
-        }
-    }
-    parse_encoding_from_declaration(data)
-}
-
-fn parse_encoding_from_declaration(data: &[u8]) -> Option<&'static Encoding> {
+/// Returns the encoding declared in the XML declaration.
+///
+/// ```
+/// XMLDecl ::= '<?xml' VersionInfo EncodingDecl? SDDecl? S? '?>'
+/// EncodingDecl ::= S 'encoding' Eq ('"' EncName '"' | "'" EncName "'")
+/// ```
+fn parse_xml_encoding_declaration(data: &[u8]) -> Option<&'static Encoding> {
     let prefix = b"<?xml";
     if data.len() < prefix.len() || !data.get(..prefix.len())?.eq_ignore_ascii_case(prefix) {
         return None;
     }
 
-    let decl_end = memchr::memmem::find(data, b"?>")?;
+    let decl_end = XML_DECL_END.find(data)?;
     let decl = data.get(..decl_end)?;
-    let enc_pos = memchr::memmem::find(decl, b"encoding")?;
+    let enc_pos = XML_DECL_ENCODING.find(decl)?;
     let after_enc = decl.get(enc_pos + 8..)?;
 
     let after_eq = skip_whitespace_and_eq(after_enc)?;
@@ -136,20 +114,47 @@ pub fn lookup_encoding(label: &str) -> PyResult<&'static Encoding> {
         })
 }
 
-pub fn decode_bytes_to_utf8<'a>(data: &'a [u8], encoding: Option<&str>) -> PyResult<Cow<'a, str>> {
-    let enc = match encoding {
-        Some(label) => lookup_encoding(label)?,
-        None => detect_encoding_from_bytes(data).unwrap_or(encoding_rs::UTF_8),
-    };
-
+pub fn decode_bytes_to_utf8<'a>(
+    data: &'a [u8],
+    encoding: Option<&'static Encoding>,
+) -> Result<Cow<'a, str>, EncodingError> {
+    let enc = encoding
+        .or_else(|| identify_encoding_from_opening_bytes(data))
+        .unwrap_or(encoding_rs::UTF_8);
     let (result, _used_encoding, had_errors) = enc.decode(data);
     if had_errors {
-        let msg = if enc == encoding_rs::UTF_8 {
-            "invalid UTF-8 data in XML input".to_string()
-        } else {
-            format!("failed to decode XML input from encoding: {}", enc.name())
-        };
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(msg));
+        Err(EncodingError(enc))
+    } else {
+        Ok(result)
     }
-    Ok(result)
+}
+
+pub mod error {
+    use super::{Encoding, PyErr};
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct EncodingError(pub &'static Encoding);
+
+    impl std::fmt::Display for EncodingError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let enc = self.0;
+            if enc == encoding_rs::UTF_8 {
+                f.write_str("invalid UTF-8 data in XML input")
+            } else {
+                write!(
+                    f,
+                    "failed to decode XML input from encoding: {}",
+                    enc.name()
+                )
+            }
+        }
+    }
+
+    impl std::error::Error for EncodingError {}
+
+    impl From<EncodingError> for PyErr {
+        fn from(err: EncodingError) -> Self {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(err.to_string())
+        }
+    }
 }
