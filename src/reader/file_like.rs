@@ -55,7 +55,7 @@ impl Read for PyFileLikeRead {
                     .get_type()
                     .name()
                     .and_then(|n| n.extract::<String>())
-                    .unwrap_or_else(|_| "unknown".to_string());
+                    .unwrap_or_else(|_| "unknown".to_owned());
                 return Err(pyerr_to_io(
                     &PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
                         "read() did not return a bytes object (type={type_name})"

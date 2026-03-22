@@ -44,7 +44,7 @@ impl XmlWriter {
         key: &str,
         data: &Bound<'py, PyAny>,
     ) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
-        let mut final_key = key.to_string();
+        let mut final_key = key.to_owned();
         let mut final_value = data.clone();
 
         if let Some(proc) = &self.preprocessor {
@@ -172,25 +172,25 @@ impl XmlWriter {
             if let Some(attr_name) = key_str.strip_prefix(self.config.attr_prefix.as_ref()) {
                 let attr_value = if let Ok(bool_val) = value.extract::<bool>() {
                     if bool_val {
-                        "true".to_string()
+                        "true".to_owned()
                     } else {
-                        "false".to_string()
+                        "false".to_owned()
                     }
                 } else if let Ok(py_str) = value.downcast::<PyString>() {
-                    py_str.to_str()?.to_string()
+                    py_str.to_str()?.to_owned()
                 } else {
                     value.str()?.to_string()
                 };
-                attributes.push((attr_name.to_string(), attr_value));
+                attributes.push((attr_name.to_owned(), attr_value));
             } else if key_str == self.config.cdata_key {
                 let text = if let Ok(bool_val) = value.extract::<bool>() {
                     if bool_val {
-                        "true".to_string()
+                        "true".to_owned()
                     } else {
-                        "false".to_string()
+                        "false".to_owned()
                     }
                 } else if let Ok(py_str) = value.downcast::<PyString>() {
-                    py_str.to_str()?.to_string()
+                    py_str.to_str()?.to_owned()
                 } else {
                     value.str()?.to_string()
                 };

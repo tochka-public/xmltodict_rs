@@ -14,7 +14,7 @@ impl AttrPrefix {
 
 impl Default for AttrPrefix {
     fn default() -> Self {
-        Self("@".to_string())
+        Self("@".to_owned())
     }
 }
 
@@ -49,7 +49,7 @@ impl CdataKey {
 
 impl Default for CdataKey {
     fn default() -> Self {
-        Self("#text".to_string())
+        Self("#text".to_owned())
     }
 }
 
@@ -108,7 +108,7 @@ impl CommentKey {
 
 impl Default for CommentKey {
     fn default() -> Self {
-        Self("#comment".to_string())
+        Self("#comment".to_owned())
     }
 }
 
@@ -143,7 +143,7 @@ impl NamespaceSeparator {
 
 impl Default for NamespaceSeparator {
     fn default() -> Self {
-        Self(":".to_string())
+        Self(":".to_owned())
     }
 }
 
