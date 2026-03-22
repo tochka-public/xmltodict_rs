@@ -10,7 +10,7 @@ from typing import Any, Callable, Protocol
 class SupportsRead(Protocol):
     def read(self, size: int = ...) -> bytes: ...
 
-XMLInput = str | bytes | SupportsRead | Generator[str | bytes, None, None]
+XMLInput = str | bytes | bytearray | SupportsRead | Generator[str | bytes, None, None]
 XMLDict = dict[str, Any]
 PostprocessorFunc = Callable[[list[str], str, Any], tuple[str, Any] | None]
 PreprocessorFunc = Callable[[str, Any], tuple[str, Any] | None]
