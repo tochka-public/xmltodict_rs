@@ -120,16 +120,11 @@ jobs:
             set -e
             wget -qO- https://astral.sh/uv/install.sh | sh
             export PATH="$HOME/.local/bin:$PATH"
-            for pyver in ${{ matrix.platform.interpreter }}; do
-              echo "::group::Python $pyver"
-              uv venv ".venv-$pyver" --python "$pyver"
-              source ".venv-$pyver/bin/activate"
-              uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
-              uv pip install --group test
-              pytest
-              deactivate
-              echo "::endgroup::"
-            done
+            uv venv
+            source .venv/bin/activate
+            uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
+            uv pip install --group test
+            pytest
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') }}
         uses: uraimo/run-on-arch-action@v2
