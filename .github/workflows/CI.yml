@@ -73,22 +73,16 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
           source $HOME/.cargo/env
-          uv venv
-          source .venv/bin/activate
-          uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
-          uv pip install --group test
-          pytest
-      - name: pytest (3.14t free-threaded)
-        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
-        shell: bash
-        run: |
-          set -e
-          export PATH="$HOME/.local/bin:$PATH"
-          uv venv .venv-ft --python 3.14t
-          source .venv-ft/bin/activate
-          uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
-          uv pip install --group test
-          pytest
+          for pyver in ${{ matrix.platform.interpreter }}; do
+            echo "::group::Python $pyver"
+            uv venv ".venv-$pyver" --python "$pyver"
+            source ".venv-$pyver/bin/activate"
+            uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
+            uv pip install --group test
+            pytest
+            deactivate
+            echo "::endgroup::"
+          done
   musllinux:
     needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
@@ -126,11 +120,16 @@ jobs:
             set -e
             wget -qO- https://astral.sh/uv/install.sh | sh
             export PATH="$HOME/.local/bin:$PATH"
-            uv venv
-            source .venv/bin/activate
-            uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
-            uv pip install --group test
-            pytest
+            for pyver in ${{ matrix.platform.interpreter }}; do
+              echo "::group::Python $pyver"
+              uv venv ".venv-$pyver" --python "$pyver"
+              source ".venv-$pyver/bin/activate"
+              uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
+              uv pip install --group test
+              pytest
+              deactivate
+              echo "::endgroup::"
+            done
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') }}
         uses: uraimo/run-on-arch-action@v2
@@ -181,22 +180,16 @@ jobs:
           set -e
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
-          uv venv
-          source .venv/Scripts/activate
-          uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
-          uv pip install --group test
-          pytest
-      - name: pytest (3.14t free-threaded)
-        if: ${{ !startsWith(matrix.platform.target, 'aarch64') }}
-        shell: bash
-        run: |
-          set -e
-          export PATH="$HOME/.local/bin:$PATH"
-          uv venv .venv-ft --python 3.14t
-          source .venv-ft/Scripts/activate
-          uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
-          uv pip install --group test
-          pytest
+          for pyver in ${{ matrix.platform.interpreter }}; do
+            echo "::group::Python $pyver"
+            uv venv ".venv-$pyver" --python "$pyver"
+            source ".venv-$pyver/Scripts/activate"
+            uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
+            uv pip install --group test
+            pytest
+            deactivate
+            echo "::endgroup::"
+          done
   macos:
     needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
@@ -232,21 +225,16 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
           source $HOME/.cargo/env
-          uv venv
-          source .venv/bin/activate
-          uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
-          uv pip install --group test
-          pytest
-      - name: pytest (3.14t free-threaded)
-        shell: bash
-        run: |
-          set -e
-          export PATH="$HOME/.local/bin:$PATH"
-          uv venv .venv-ft --python 3.14t
-          source .venv-ft/bin/activate
-          uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
-          uv pip install --group test
-          pytest
+          for pyver in ${{ matrix.platform.interpreter }}; do
+            echo "::group::Python $pyver"
+            uv venv ".venv-$pyver" --python "$pyver"
+            source ".venv-$pyver/bin/activate"
+            uv pip install xmltodict-rs --no-index --find-links dist --force-reinstall
+            uv pip install --group test
+            pytest
+            deactivate
+            echo "::endgroup::"
+          done
   sdist:
     needs: [checks]
     runs-on: ubuntu-latest
