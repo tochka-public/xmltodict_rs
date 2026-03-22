@@ -20,15 +20,16 @@ use config::{AttrPrefix, CdataKey, CommentKey, NamespaceSeparator, ParseConfig, 
 use encoding::decode_bytes_to_utf8;
 use error::{expat_error, map_quick_xml_error, validate_element_name};
 use parser::XmlParser;
-use reader::{PyFileLikeRead, PyGeneratorRead};
+use reader::{DecodingReader, PyFileLikeRead, PyGeneratorRead};
 use unparser::XmlWriter;
 
+use crate::encoding::lookup_encoding;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyModule, PyString};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 
 #[cfg(all(
     feature = "mimalloc",
@@ -192,6 +193,8 @@ fn parse(
     comment_key: &str,
     namespaces: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
+    let encoding = encoding.map(lookup_encoding).transpose()?;
+
     let namespaces_rs = namespaces
         .map(|dict_py| extract_hashmap(py, &dict_py))
         .transpose()?;
@@ -240,28 +243,11 @@ fn parse(
 
     if let Ok(read_attr) = xml_input.getattr("read") {
         if read_attr.is_callable() {
-            if encoding.is_some() {
-                let mut raw = Vec::new();
-                PyFileLikeRead::new(xml_input.clone().unbind())
-                    .read_to_end(&mut raw)
-                    .map_err(|e| {
-                        error::pyerr_from_io(&e).unwrap_or_else(|| expat_error(py, e.to_string()))
-                    })?;
-                let decoded = decode_bytes_to_utf8(&raw, encoding)?;
-                return parse_xml_with_reader(
-                    py,
-                    decoded.as_bytes(),
-                    &config,
-                    force_list,
-                    postprocessor,
-                    strip_whitespace,
-                    process_comments,
-                );
-            }
-            let reader = BufReader::new(PyFileLikeRead::new(xml_input.clone().unbind()));
+            let file = PyFileLikeRead::new(xml_input.clone().unbind());
+            let reader = DecodingReader::for_xml_input(file, encoding);
             return parse_xml_with_reader(
                 py,
-                reader,
+                BufReader::new(reader),
                 &config,
                 force_list,
                 postprocessor,
@@ -272,28 +258,11 @@ fn parse(
     }
 
     if is_generator(py, xml_input)? {
-        if encoding.is_some() {
-            let mut raw = Vec::new();
-            PyGeneratorRead::new(xml_input.clone().unbind())
-                .read_to_end(&mut raw)
-                .map_err(|e| {
-                    error::pyerr_from_io(&e).unwrap_or_else(|| expat_error(py, e.to_string()))
-                })?;
-            let decoded = decode_bytes_to_utf8(&raw, encoding)?;
-            return parse_xml_with_reader(
-                py,
-                decoded.as_bytes(),
-                &config,
-                force_list,
-                postprocessor,
-                strip_whitespace,
-                process_comments,
-            );
-        }
-        let reader = BufReader::new(PyGeneratorRead::new(xml_input.clone().unbind()));
+        let generator = PyGeneratorRead::new(xml_input.clone().unbind());
+        let reader = DecodingReader::for_xml_input(generator, encoding);
         return parse_xml_with_reader(
             py,
-            reader,
+            BufReader::new(reader),
             &config,
             force_list,
             postprocessor,

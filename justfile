@@ -40,6 +40,9 @@ dev-release:
 bench: dev-release
     uv run python benches/accurate_benchmark.py
 
+bench-streaming: dev-release
+    uv run python benches/file_stream_benchmark.py --size-gb 10 --compare-xmltodict
+
 clean:
     cargo clean
     rm -rf dist/

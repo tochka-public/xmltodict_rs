@@ -1,4 +1,5 @@
 import io
+import xml.parsers.expat as expat
 from typing import Any
 
 import pytest
@@ -127,6 +128,86 @@ def test_parse_generator_with_encoding() -> None:
 
     result = xmltodict_rs.parse(gen(), encoding="windows-1251")
     assert result == {"root": {"item": CYRILLIC_SAMPLE}}
+
+
+def test_parse_file_like_auto_detect_from_declaration() -> None:
+    xml_str = (
+        '<?xml version="1.0" encoding="windows-1251"?>\n'
+        f"<root><item>{CYRILLIC_SAMPLE}</item></root>"
+    )
+    xml_bytes = xml_str.encode("windows-1251")
+    result = xmltodict_rs.parse(io.BytesIO(xml_bytes))
+    assert result == {"root": {"item": CYRILLIC_SAMPLE}}
+
+
+def test_parse_generator_auto_detect_from_declaration() -> None:
+    xml_str = (
+        '<?xml version="1.0" encoding="windows-1251"?>\n'
+        f"<root><item>{CYRILLIC_SAMPLE}</item></root>"
+    )
+    xml_bytes = xml_str.encode("windows-1251")
+
+    def gen():
+        yield xml_bytes[:7]
+        yield xml_bytes[7:21]
+        yield xml_bytes[21:]
+
+    result = xmltodict_rs.parse(gen())
+    assert result == {"root": {"item": CYRILLIC_SAMPLE}}
+
+
+def test_parse_file_like_auto_detect_utf16_bom() -> None:
+    xml = b"\xff\xfe" + "<root><item>Hi</item></root>".encode("utf-16-le")
+    result = xmltodict_rs.parse(io.BytesIO(xml))
+    assert result == {"root": {"item": "Hi"}}
+
+
+def test_parse_generator_auto_detect_utf16_bom() -> None:
+    xml = b"\xff\xfe" + "<root><item>Hi</item></root>".encode("utf-16-le")
+
+    def gen():
+        yield xml[:1]
+        yield xml[1:3]
+        yield xml[3:]
+
+    result = xmltodict_rs.parse(gen())
+    assert result == {"root": {"item": "Hi"}}
+
+
+def test_parse_file_like_split_utf8_multibyte_sequence() -> None:
+    class ChunkedReader:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self._chunks = chunks
+
+        def read(self, _size: int = -1) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    emoji = "🙂".encode("utf-8")  # 4 bytes: F0 9F 99 82
+    chunks = [
+        b'<?xml version="1.0" encoding="utf-8"?><root><item>' + emoji[:1],
+        emoji[1:2],
+        emoji[2:],
+        b"</item></root>",
+    ]
+    result = xmltodict_rs.parse(ChunkedReader(chunks))
+    assert result == {"root": {"item": "🙂"}}
+
+
+def test_parse_file_like_invalid_utf8_with_encoding_raises() -> None:
+    with pytest.raises(expat.ExpatError, match=r"invalid UTF-8 data in XML input"):
+        xmltodict_rs.parse(io.BytesIO(b"<root>\xff</root>"), encoding="utf-8")
+
+
+def test_parse_generator_invalid_utf8_with_encoding_raises() -> None:
+    def gen():
+        yield b"<root>"
+        yield b"\xff"
+        yield b"</root>"
+
+    with pytest.raises(expat.ExpatError, match=r"invalid UTF-8 data in XML input"):
+        xmltodict_rs.parse(gen(), encoding="utf-8")
 
 
 # --- parse: error cases ---
