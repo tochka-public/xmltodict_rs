@@ -85,6 +85,7 @@ ignore = [
 "**/__init__.py" = [
     "D104", # package-level docstring optional
     "F403", # wildcard import needed for re-exporting native module
+    "F405", # names re-exported from wildcard import
 ]
 
 [tool.ruff.lint.mccabe]
