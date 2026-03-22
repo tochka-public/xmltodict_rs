@@ -32,6 +32,8 @@ Or with uv:
 uv add xmltodict-rs
 ```
 
+If a pre-built wheel is not available for your platform, install the [Rust toolchain](https://rustup.rs/) first — the package will be compiled from source automatically.
+
 ## Quick Start
 
 ```python
