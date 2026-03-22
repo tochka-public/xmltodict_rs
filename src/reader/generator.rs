@@ -77,7 +77,7 @@ impl PyGeneratorRead {
                 let bytes_obj = chunk_memview
                     .call_method0("tobytes")
                     .map_err(|err| pyerr_to_io(&err))?;
-                let bytes = bytes_obj.downcast::<PyBytes>().map_err(|_| {
+                let bytes = bytes_obj.downcast::<PyBytes>().map_err(|_err| {
                     pyerr_to_io(&PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                         "a bytes-like object or str is required, not 'memoryview'",
                     ))
@@ -158,7 +158,7 @@ impl Read for PyGeneratorRead {
                     .get_type()
                     .name()
                     .and_then(|n| n.extract::<String>())
-                    .unwrap_or_else(|_| "unknown".to_string());
+                    .unwrap_or_else(|_| "unknown".to_owned());
                 return Err(pyerr_to_io(
                     &PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
                         "a bytes-like object or str is required, not '{type_name}'"

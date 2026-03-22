@@ -33,7 +33,7 @@ impl From<&str> for NamespacePrefix {
         if s.is_empty() {
             Self::Default
         } else {
-            Self::Named(s.to_string())
+            Self::Named(s.to_owned())
         }
     }
 }
@@ -108,7 +108,7 @@ impl XmlParser {
         key: &str,
         data: &Bound<'py, PyAny>,
     ) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
-        let mut final_key = key.to_string();
+        let mut final_key = key.to_owned();
         let mut final_value = data.clone();
 
         if let Some(proc) = &self.postprocessor {
@@ -162,11 +162,11 @@ impl XmlParser {
 
     fn build_name(&self, full_name: &str) -> String {
         if !self.config.process_namespaces {
-            return full_name.to_string();
+            return full_name.to_owned();
         }
 
         let Some(ns_map) = self.namespace_stack.last() else {
-            return full_name.to_string();
+            return full_name.to_owned();
         };
         let ns_sep = &self.config.namespace_separator;
         let (prefix, name) = full_name
@@ -180,11 +180,11 @@ impl XmlParser {
                 .and_then(|m| m.get(uri))
                 .unwrap_or(uri);
             if mapped.is_empty() {
-                return name.to_string();
+                return name.to_owned();
             }
             return format!("{mapped}{ns_sep}{name}");
         }
-        full_name.to_string()
+        full_name.to_owned()
     }
 
     pub fn start_element(
@@ -205,14 +205,14 @@ impl XmlParser {
                 let value_string = attr
                     .unescape_value()
                     .map_err(|e| expat_error(py, e.to_string()))?
-                    .to_string();
+                    .into_owned();
 
                 if self.config.process_namespaces {
                     if let Some(ns) = key.as_namespace_binding() {
                         match ns {
                             PrefixDeclaration::Default => {
                                 current_ns_map.insert(
-                                    NamespacePrefix::Default.as_str().to_string(),
+                                    NamespacePrefix::Default.as_str().to_owned(),
                                     value_string,
                                 );
                             }
@@ -285,7 +285,7 @@ impl XmlParser {
         let element_name = if self.config.process_namespaces {
             self.build_name(name)
         } else {
-            name.to_string()
+            name.to_owned()
         };
 
         self.stack.push(element_dict.into());
@@ -299,13 +299,13 @@ impl XmlParser {
         let element_name = self.build_name(name);
 
         let Some(current_element) = self.stack.pop() else {
-            return Err(expat_error(py, "unexpected closing tag".to_string()));
+            return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
         let Some(text_parts) = self.text_stack.pop() else {
-            return Err(expat_error(py, "unexpected closing tag".to_string()));
+            return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
         let Some(_) = self.path.pop() else {
-            return Err(expat_error(py, "unexpected closing tag".to_string()));
+            return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
 
         let text_content = if text_parts.is_empty() {
@@ -368,7 +368,7 @@ impl XmlParser {
             self.stack.push(result_dict.into());
         } else {
             let Some(parent) = self.stack.last() else {
-                return Err(expat_error(py, "unexpected closing tag".to_string()));
+                return Err(expat_error(py, "unexpected closing tag".to_owned()));
             };
             let parent_dict = parent.downcast_bound::<PyDict>(py)?;
 
@@ -376,7 +376,7 @@ impl XmlParser {
         }
 
         let Some(_) = self.namespace_stack.pop() else {
-            return Err(expat_error(py, "unexpected closing tag".to_string()));
+            return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
 
         Ok(())
@@ -384,7 +384,7 @@ impl XmlParser {
 
     pub fn characters(&mut self, data: &str) {
         if let Some(current_text) = self.text_stack.last_mut() {
-            current_text.push(data.to_string());
+            current_text.push(data.to_owned());
         }
     }
 

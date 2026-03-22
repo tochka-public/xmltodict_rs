@@ -21,7 +21,7 @@ impl std::fmt::Display for WrappedPyErr {
                 .value(py)
                 .str()
                 .and_then(|s| s.extract::<String>())
-                .unwrap_or_else(|_| "Python error".to_string());
+                .unwrap_or_else(|_| "Python error".to_owned());
             write!(f, "{msg}")
         })
     }
@@ -59,7 +59,7 @@ pub fn validate_element_name(py: Python, name: &str) -> PyResult<()> {
     if name.is_empty() || name.chars().any(|x| matches!(x, '<' | '>')) {
         return Err(expat_error(
             py,
-            "not well-formed (invalid element name)".to_string(),
+            "not well-formed (invalid element name)".to_owned(),
         ));
     }
     Ok(())

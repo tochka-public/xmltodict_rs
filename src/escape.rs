@@ -27,28 +27,26 @@ pub fn escape_xml(text: &str) -> Cow<'_, str> {
     let ptr = bytes.as_ptr();
 
     while i < len {
-        let byte = unsafe {
-            // SAFETY: `ptr` comes from `bytes.as_ptr()` which is valid for reads,
-            // and `i` is bounded by `bytes.len()`, so `ptr.add(i)` is within bounds.
-            *ptr.add(i)
-        };
+        // SAFETY: `ptr` comes from `bytes.as_ptr()` which is valid for reads,
+        // and `i` is bounded by `bytes.len()`, so `ptr.add(i)` is within bounds.
+        let byte = unsafe { *ptr.add(i) };
         match byte {
             AMPERSAND | LT | GT => {
                 if last_pos < i {
+                    // SAFETY: The slice from `last_pos` to `i` is valid UTF-8 because
+                    // it's a subslice of the original `text` which is guaranteed to be valid UTF-8.
                     let slice = unsafe {
-                        // SAFETY: The slice from `last_pos` to `i` is valid UTF-8 because
-                        // it's a subslice of the original `text` which is guaranteed to be valid UTF-8.
                         from_utf8_unchecked(from_raw_parts(ptr.add(last_pos), i - last_pos))
                     };
                     result.push_str(slice);
                 }
 
-                match byte {
-                    AMPERSAND => result.push_str(ESCAPED_AMP),
-                    LT => result.push_str(ESCAPED_LT),
-                    GT => result.push_str(ESCAPED_GT),
-                    _ => unreachable!(),
-                }
+                let escaped = match byte {
+                    AMPERSAND => ESCAPED_AMP,
+                    LT => ESCAPED_LT,
+                    _ => ESCAPED_GT,
+                };
+                result.push_str(escaped);
                 last_pos = i + 1;
             }
             _ => {}
@@ -57,11 +55,10 @@ pub fn escape_xml(text: &str) -> Cow<'_, str> {
     }
 
     if last_pos < len {
-        let slice = unsafe {
-            // SAFETY: The slice from `last_pos` to `bytes.len()` is valid UTF-8 because
-            // it's a subslice of the original `text` which is guaranteed to be valid UTF-8.
-            from_utf8_unchecked(from_raw_parts(ptr.add(last_pos), len - last_pos))
-        };
+        // SAFETY: The slice from `last_pos` to `bytes.len()` is valid UTF-8 because
+        // it's a subslice of the original `text` which is guaranteed to be valid UTF-8.
+        let slice =
+            unsafe { from_utf8_unchecked(from_raw_parts(ptr.add(last_pos), len - last_pos)) };
         result.push_str(slice);
     }
 
@@ -84,13 +81,13 @@ pub fn escape_xml_attr(text: &str) -> Cow<'_, str> {
                 if !is_first_escape {
                     s.push_str(&text[last_pos..i]);
                 }
-                match ch {
-                    '&' => s.push_str("&amp;"),
-                    '<' => s.push_str("&lt;"),
-                    '>' => s.push_str("&gt;"),
-                    '"' => s.push_str("&quot;"),
-                    _ => unreachable!(),
-                }
+                let escaped = match ch {
+                    '&' => "&amp;",
+                    '<' => "&lt;",
+                    '>' => "&gt;",
+                    _ => "&quot;",
+                };
+                s.push_str(escaped);
                 last_pos = i + ch.len_utf8();
             }
             _ => {}

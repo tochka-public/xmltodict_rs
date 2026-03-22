@@ -46,18 +46,18 @@ fn is_generator(py: Python, xml_input: &Bound<'_, PyAny>) -> PyResult<bool> {
 }
 
 fn extract_hashmap(py: Python, dict_input: &Py<PyAny>) -> PyResult<HashMap<String, String>> {
-    let dict = dict_input.downcast_bound::<PyDict>(py).map_err(|_| {
+    let dict = dict_input.downcast_bound::<PyDict>(py).map_err(|_err| {
         PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespaces must be a dictionary")
     })?;
 
     let mut hashmap = HashMap::with_capacity(dict.len());
 
     for (key, value) in dict {
-        let key_str = key.downcast::<PyString>().map_err(|_| {
+        let key_str = key.downcast::<PyString>().map_err(|_err| {
             PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace keys must be strings")
         })?;
 
-        let value_str = value.downcast::<PyString>().map_err(|_| {
+        let value_str = value.downcast::<PyString>().map_err(|_err| {
             PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace values must be strings")
         })?;
 
@@ -136,13 +136,13 @@ fn parse_xml_with_reader<R: BufRead>(
         || !parser.text_stack.is_empty()
         || !parser.namespace_stack.is_empty()
     {
-        return Err(expat_error(py, "unclosed element(s) found".to_string()));
+        return Err(expat_error(py, "unclosed element(s) found".to_owned()));
     }
 
     match parser.stack.as_slice() {
         [one] => Ok(one.clone_ref(py)),
-        [] => Err(expat_error(py, "no element found".to_string())),
-        [_, ..] => Err(expat_error(py, "unclosed element(s) found".to_string())),
+        [] => Err(expat_error(py, "no element found".to_owned())),
+        [_, ..] => Err(expat_error(py, "unclosed element(s) found".to_owned())),
     }
 }
 
@@ -198,7 +198,7 @@ fn parse(
         attr_prefix: AttrPrefix::new(attr_prefix),
         cdata_key: CdataKey::new(cdata_key),
         force_cdata,
-        cdata_separator: cdata_separator.to_string(),
+        cdata_separator: cdata_separator.to_owned(),
         strip_whitespace,
         namespace_separator: NamespaceSeparator::new(namespace_separator),
         process_namespaces,
@@ -305,14 +305,14 @@ fn unparse(
     preprocessor: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let config = UnparseConfig {
-        encoding: encoding.to_string(),
+        encoding: encoding.to_owned(),
         full_document,
         short_empty_elements,
         attr_prefix: AttrPrefix::new(attr_prefix),
         cdata_key: CdataKey::new(cdata_key),
         pretty,
-        newl: newl.to_string(),
-        indent: indent.to_string(),
+        newl: newl.to_owned(),
+        indent: indent.to_owned(),
     };
 
     let mut writer = XmlWriter::new(config, preprocessor);
