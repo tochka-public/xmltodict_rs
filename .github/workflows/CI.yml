@@ -42,12 +42,12 @@ jobs:
     strategy:
       matrix:
         platform:
-          - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
-          - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
-          - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11", no_default_features: true }
-          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11", no_default_features: true }
-          - { runner: ubuntu-22.04, target: s390x, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11", no_default_features: true }
-          - { runner: ubuntu-22.04, target: ppc64le, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11", no_default_features: true }
+          - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t", no_default_features: true }
+          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t", no_default_features: true }
+          - { runner: ubuntu-22.04, target: s390x, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t", no_default_features: true }
+          - { runner: ubuntu-22.04, target: ppc64le, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t", no_default_features: true }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -89,10 +89,10 @@ jobs:
     strategy:
       matrix:
         platform:
-          - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
-          - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
-          - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
-          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
+          - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -154,7 +154,7 @@ jobs:
     strategy:
       matrix:
         platform:
-          - { runner: windows-latest, target: x64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
+          - { runner: windows-latest, target: x64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
           - { runner: windows-latest, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
     steps:
       - uses: actions/checkout@v4
@@ -196,8 +196,8 @@ jobs:
     strategy:
       matrix:
         platform:
-          - { runner: macos-14, target: aarch64, rust_target: aarch64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
-          - { runner: macos-15-intel, target: x86_64, rust_target: x86_64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t pypy3.10 pypy3.11" }
+          - { runner: macos-14, target: aarch64, rust_target: aarch64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
+          - { runner: macos-15-intel, target: x86_64, rust_target: x86_64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
