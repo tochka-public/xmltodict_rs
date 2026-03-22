@@ -46,6 +46,10 @@ test = [
     "xmltodict==0.13.0",
 ]
 
+[tool.maturin]
+python-source = "python"
+module-name = "xmltodict_rs.xmltodict_rs"
+
 [tool.ruff]
 line-length = 100
 target-version = "py39"
@@ -81,6 +85,7 @@ ignore = [
 ]
 "**/__init__.py" = [
     "D104", # package-level docstring optional
+    "F403", # wildcard import needed for re-exporting native module
 ]
 
 [tool.ruff.lint.mccabe]
