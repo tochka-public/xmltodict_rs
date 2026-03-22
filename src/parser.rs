@@ -359,7 +359,12 @@ impl XmlParser {
             else {
                 return Ok(());
             };
-            result_dict.set_item(final_key, final_value)?;
+            if self.should_force_list(py, final_key.as_str(), final_value.as_ref())? {
+                let new_list = PyList::new(py, [final_value.clone()])?;
+                result_dict.set_item(final_key, &new_list)?;
+            } else {
+                result_dict.set_item(final_key, final_value)?;
+            }
             self.stack.push(result_dict.into());
         } else {
             let Some(parent) = self.stack.last() else {

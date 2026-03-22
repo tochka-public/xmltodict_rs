@@ -7,7 +7,6 @@ import xmltodict_rs
 @pytest.mark.parametrize(
     "force_list_value,expected_type",
     [
-        (True, list),
         (False, str),
         (("server",), list),
         (["server"], list),
@@ -27,6 +26,15 @@ def test_force_list_various_types(force_list_value, expected_type):
         assert result["servers"]["server"] == ["test"]
     else:
         assert result["servers"]["server"] == "test"
+
+
+def test_force_list_true_wraps_all_including_root():
+    xml = "<servers><server>test</server></servers>"
+    result = xmltodict_rs.parse(xml, force_list=True)
+
+    assert "servers" in result
+    assert isinstance(result["servers"], list)
+    assert result["servers"] == [{"server": ["test"]}]
 
 
 @pytest.mark.parametrize(
@@ -126,6 +134,8 @@ def test_force_list_invalid_types():
     [
         ("<root><item>1</item><item>2</item></root>", ("item",)),
         ("<config><servers><server>test</server></servers></config>", ("server",)),
+        ("<detail><msg>error</msg><type>value_error</type></detail>", ("detail",)),
+        ("<item>value</item>", ("item",)),
     ],
 )
 def test_force_list_compatibility_with_original(xml, force_list):
@@ -134,11 +144,26 @@ def test_force_list_compatibility_with_original(xml, force_list):
     assert rust == original, f"Mismatch for XML: {xml}, force_list: {force_list}"
 
 
+def test_force_list_root_element():
+    xml = "<detail><msg>error</msg><type>value_error</type></detail>"
+    result = xmltodict_rs.parse(xml, force_list=("detail",))
+    assert isinstance(result["detail"], list)
+    assert result["detail"] == [{"msg": "error", "type": "value_error"}]
+
+
+def test_force_list_root_element_true():
+    xml = "<root>value</root>"
+    result = xmltodict_rs.parse(xml, force_list=True)
+    assert isinstance(result["root"], list)
+    assert result["root"] == ["value"]
+
+
 def test_force_list_true_makes_all_lists():
     xml = "<root><a>1</a><b>2</b></root>"
     result = xmltodict_rs.parse(xml, force_list=True)
-    assert isinstance(result["root"]["a"], list)
-    assert isinstance(result["root"]["b"], list)
+    assert isinstance(result["root"], list)
+    assert isinstance(result["root"][0]["a"], list)
+    assert isinstance(result["root"][0]["b"], list)
 
 
 def test_force_list_with_nested_elements():
