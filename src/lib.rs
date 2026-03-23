@@ -345,8 +345,7 @@ fn unparse(
     Ok(result.into_pyobject(py)?.into_any().unbind())
 }
 
-/// A Python module implemented in Rust.
-#[pymodule]
+#[pymodule(gil_used = false)]
 fn xmltodict_rs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(unparse, m)?)?;
