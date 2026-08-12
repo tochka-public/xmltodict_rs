@@ -44,4 +44,18 @@ impl PendingBytes {
         }
         to_copy
     }
+
+    /// Copy as much of `bytes` as fits into `out`; stash the tail as pending.
+    /// Returns the number of bytes written into `out`.
+    pub fn write_chunk(&mut self, bytes: &[u8], out: &mut [u8]) -> usize {
+        let to_copy = bytes.len().min(out.len());
+        let (head, tail) = bytes.split_at(to_copy);
+        if let Some(dst) = out.get_mut(..to_copy) {
+            dst.copy_from_slice(head);
+        }
+        if !tail.is_empty() {
+            self.fill_from_slice(tail);
+        }
+        to_copy
+    }
 }

@@ -41,15 +41,7 @@ impl Read for PyFileLikeRead {
                 chunk_bytes.as_bytes()
             } else if let Ok(chunk_bytearray) = chunk.cast::<PyByteArray>() {
                 self.bytearray_buffer = Some(chunk_bytearray.to_vec());
-                if let Some(bytes_ref) = self.bytearray_buffer.as_deref() {
-                    bytes_ref
-                } else {
-                    return Err(pyerr_to_io(
-                        &PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                            "read() did not return a bytes object (type=bytearray)",
-                        ),
-                    ));
-                }
+                self.bytearray_buffer.as_deref().unwrap_or(&[])
             } else {
                 let type_name = chunk
                     .get_type()
@@ -67,24 +59,7 @@ impl Read for PyFileLikeRead {
                 return Ok(0);
             }
 
-            if bytes.len() <= out.len() {
-                let Some(dst) = out.get_mut(..bytes.len()) else {
-                    return Err(io::Error::other("Internal buffer error"));
-                };
-                dst.copy_from_slice(bytes);
-                return Ok(bytes.len());
-            }
-
-            let out_len = out.len();
-            let Some(src) = bytes.get(..out_len) else {
-                return Err(io::Error::other("Internal buffer error"));
-            };
-            out.copy_from_slice(src);
-            let Some(rest) = bytes.get(out_len..) else {
-                return Err(io::Error::other("Internal buffer error"));
-            };
-            self.pending.fill_from_slice(rest);
-            Ok(out.len())
+            Ok(self.pending.write_chunk(bytes, out))
         })
     }
 }
