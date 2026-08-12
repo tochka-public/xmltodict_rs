@@ -134,8 +134,11 @@ numbers), so treat the figures as an order-of-magnitude guide, not an SLA.
 ## Known Limitations
 
 The following inputs are accepted by upstream `xmltodict` but are not
-implemented in `xmltodict_rs`. Calling `parse()`/`unparse()` with them raises
-`NotImplementedError` instead of silently diverging from expected behavior:
+implemented in `xmltodict_rs`. Calling `parse()` with them raises
+`NotImplementedError` instead of silently diverging from expected behavior
+(all three limitations apply to `parse()` only — `unparse()` has no
+`item_depth`/`item_callback`/`disable_entities` parameters, and its
+`encoding` argument is written into the XML declaration as-is):
 
 - **Streaming mode** — `item_depth > 0` or a non-`None` `item_callback` in
   `parse()`. Only whole-document parsing is supported.
