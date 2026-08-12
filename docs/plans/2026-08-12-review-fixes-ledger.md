@@ -34,7 +34,7 @@ Gate numbers come from `benches/perf_gate.py` (per-case median_us + spread, JSON
 | Checkpoint | parse | unparse | Comment |
 |------------|-------|---------|---------|
 | README baseline | 6.23x | 8.76x | avg speedup vs xmltodict, accurate_benchmark.py, 2026-08-13 (README-facing only) |
-| perf_gate baseline (Task 0) | — | — | /tmp/perf-baseline.json; paste printed medians here |
+| perf_gate baseline (Task 0) | 1.25us (0.0%), 61.52us (1.4%), 404.73us (1.6%) | 0.62us (0.0%), 26.94us (1.1%), 188.10us (2.5%) | /tmp/perf-baseline.json; small-parse, medium-parse, large-parse (left); small-unparse, medium-unparse, large-unparse (right); values with spread % |
 | After Task 7 (upgrade) | — | — | quick-xml 0.41 must not regress |
 | After Task 11 | — | — | zero delta acceptable (unsafe removal) |
 | After Task 12 | — | — | baseline of the perf series |
@@ -59,7 +59,7 @@ _(filled in during Task 16 from the "Benchmarks" table; every perf task must hav
 
 ## Deviations found during execution
 
-_(empty — fill in during execution: new bugs from hypothesis, quick-xml 0.41 error-text changes, pyo3 0.29 incompatibilities, etc.)_
+- Task 0: raised REPEATS from 5 to 10 during self-validation (identical-code runs showed false FASTER/SLOWER verdicts at 5 and 8 repeats; clean noise all cases at 10). Final perf_gate config: REPEATS=10, LOOP_SECONDS=1.0, WARMUP_SECONDS=0.5, NOISE_FLOOR_PCT=2.0.
 
 ## Out of scope (from the plan, do not lose)
 
