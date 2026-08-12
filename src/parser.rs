@@ -56,6 +56,16 @@ pub struct XmlParser {
     pub path: Vec<String>,
     pub text_stack: Vec<Vec<String>>,
     pub namespace_stack: Vec<HashMap<String, String>>,
+    /// Parallel to `text_stack`: for the current element, `true` once a
+    /// coalescible fragment (`Text`/`GeneralRef`) has been pushed onto
+    /// `text_stack` without an intervening structural break (child element or
+    /// CDATA section). While `true`, the next coalescible fragment is appended
+    /// to the last string instead of starting a new one. This mirrors expat's
+    /// `buffer_text=True` mode (which `xmltodict` relies on): entity references
+    /// resolved inline with surrounding text must not introduce a
+    /// `cdata_separator` between them, but text separated by a child element or
+    /// a CDATA section is a genuine, separately-buffered fragment and keeps it.
+    text_run_open: Vec<bool>,
 }
 
 impl XmlParser {
@@ -73,6 +83,7 @@ impl XmlParser {
             path: Vec::new(),
             text_stack: Vec::new(),
             namespace_stack: Vec::new(),
+            text_run_open: Vec::new(),
         }
     }
 
@@ -288,9 +299,18 @@ impl XmlParser {
             name.to_owned()
         };
 
+        // A child element is a structural break in the parent's text run: text
+        // before and after it must land in separate fragments (and therefore get
+        // `cdata_separator` between them), even though within each side entity
+        // references still coalesce with their neighboring text.
+        if let Some(parent_run_open) = self.text_run_open.last_mut() {
+            *parent_run_open = false;
+        }
+
         self.stack.push(element_dict.into());
         self.path.push(element_name);
         self.text_stack.push(Vec::new());
+        self.text_run_open.push(false);
 
         Ok(())
     }
@@ -302,6 +322,9 @@ impl XmlParser {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
         let Some(text_parts) = self.text_stack.pop() else {
+            return Err(expat_error(py, "unexpected closing tag".to_owned()));
+        };
+        let Some(_) = self.text_run_open.pop() else {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
         let Some(_) = self.path.pop() else {
@@ -392,9 +415,27 @@ impl XmlParser {
         Ok(())
     }
 
-    pub fn characters(&mut self, data: &str) {
+    /// Append text content for the current element.
+    ///
+    /// `coalesce` distinguishes `Text`/`GeneralRef` events (`true`) from `CData`
+    /// events (`false`). Coalescible fragments merge into the last fragment as
+    /// long as no structural break (child element start, or a non-coalescible
+    /// fragment) happened since -- see `text_run_open` for why.
+    pub fn characters(&mut self, data: &str, coalesce: bool) {
+        let run_open = self.text_run_open.last().copied().unwrap_or(false);
+
+        if coalesce && run_open {
+            if let Some(current_text) = self.text_stack.last_mut().and_then(|v| v.last_mut()) {
+                current_text.push_str(data);
+                return;
+            }
+        }
+
         if let Some(current_text) = self.text_stack.last_mut() {
             current_text.push(data.to_owned());
+        }
+        if let Some(run_open) = self.text_run_open.last_mut() {
+            *run_open = coalesce;
         }
     }
 

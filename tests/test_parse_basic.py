@@ -324,11 +324,32 @@ def test_whitespace_around_entities_and_children_no_strip(strip_whitespace):
 
 
 def test_undefined_entity_raises():
-    xml = "<root>&undefined;</root>"
-    with pytest.raises(Exception):  # noqa: B017
-        xmltodict.parse(xml)
-    with pytest.raises(Exception):  # noqa: B017
-        xmltodict_rs.parse(xml)
+    compare_parsers("<root>&undefined;</root>")
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        # Entity references resolved inline with surrounding text must NOT
+        # introduce cdata_separator between the entity and its neighboring
+        # text -- expat's buffer_text=True coalesces them into one
+        # characters() call, and xmltodict relies on that.
+        "<a>x &amp; y</a>",
+        "<a>x &#65; y</a>",
+        "<a>&amp;&amp;</a>",
+        "<a>&amp;x&amp;</a>",
+        "<a>x&amp;</a>",
+        "<a>&amp;x</a>",
+        # A child element IS a genuine fragment break, so the separator
+        # between the text before and after it must survive.
+        "<a>x<b>1</b>y</a>",
+        "<a>x<b>1</b>&amp;y</a>",
+        # CDATA sections are also a genuine fragment break.
+        "<a>x<![CDATA[cd]]>y</a>",
+    ],
+)
+def test_cdata_separator_not_injected_at_entity_boundaries(xml):
+    compare_parsers(xml, cdata_separator="|")
 
 
 def test_complex_real_world():

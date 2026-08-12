@@ -166,7 +166,7 @@ fn parse_xml_with_reader<R: BufRead>(
                     };
                     return Err(expat_error(py, msg.to_owned()));
                 }
-                parser.characters(&text);
+                parser.characters(&text, true);
             }
             Ok(Event::GeneralRef(ref e)) => {
                 if parser.path.is_empty() {
@@ -178,13 +178,13 @@ fn parse_xml_with_reader<R: BufRead>(
                     return Err(expat_error(py, msg.to_owned()));
                 }
                 let resolved = resolve_general_ref(py, e)?;
-                parser.characters(&resolved);
+                parser.characters(&resolved, true);
             }
             Ok(Event::CData(ref e)) => {
                 if parser.path.is_empty() {
                     return Err(expat_error(py, "junk after document element".to_owned()));
                 }
-                parser.characters(utf8_str(e.as_ref())?);
+                parser.characters(utf8_str(e.as_ref())?, false);
             }
             Ok(Event::Comment(ref e)) if process_comments => {
                 parser.comment(py, utf8_str(e.as_ref())?)?;
