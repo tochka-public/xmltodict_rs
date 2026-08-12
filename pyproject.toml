@@ -43,6 +43,7 @@ test = [
     "pytest>=8.0.0",
     "pytest-benchmark>=4.0.0",
     "xmltodict==0.13.0",
+    "hypothesis>=6.100",
 ]
 
 [tool.maturin]

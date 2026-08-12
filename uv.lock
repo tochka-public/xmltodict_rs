@@ -457,6 +457,7 @@ dev = [
     { name = "xmltodict" },
 ]
 test = [
+    { name = "hypothesis" },
     { name = "pytest" },
     { name = "pytest-benchmark" },
     { name = "xmltodict" },
@@ -475,6 +476,7 @@ dev = [
     { name = "xmltodict", specifier = "==0.13.0" },
 ]
 test = [
+    { name = "hypothesis", specifier = ">=6.100" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-benchmark", specifier = ">=4.0.0" },
     { name = "xmltodict", specifier = "==0.13.0" },

@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+# NOTE: no benchmark job here on purpose. Shared GitHub-hosted runners are too
+# noisy for perf gating (see Task 0 rationale in docs/plans) — benchmarks run
+# locally/out-of-band via `just bench`, not in CI.
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -28,14 +32,33 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y python3-dev
+      # toolchain input intentionally omitted: dtolnay/rust-toolchain reads
+      # the pinned version from rust-toolchain.toml so there is a single
+      # source of truth for the MSRV.
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.91.0
           components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
       - name: cargo fmt
         run: cargo fmt --check
       - name: cargo clippy
         run: cargo clippy --all-targets --all-features
+      - name: cargo test
+        run: cargo test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: |
+          set -e
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install Python lint deps
+        run: uv sync --only-group dev --no-install-project
+      - name: ruff check
+        run: uv run --no-sync ruff check .
+      - name: ruff format check
+        run: uv run --no-sync ruff format --check .
   linux:
     needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
@@ -198,9 +221,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: 3.12
+      # toolchain input intentionally omitted: reads the pinned version from
+      # rust-toolchain.toml (see checks job above).
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.91.0
           targets: ${{ matrix.platform.rust_target }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
