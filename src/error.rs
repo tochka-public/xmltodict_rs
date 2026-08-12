@@ -2,9 +2,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyModule, PyType};
 use std::io;
 
-/// Wrapper to store `PyErr` inside `io::Error` while preserving the original exception type.
-/// `PyErr` is Send but not Sync, so we need unsafe impl Sync.
-/// This is safe because we only access the inner `PyErr` while holding the GIL.
+/// Wrapper to store `PyErr` inside `io::Error` while preserving the original
+/// exception type. `PyErr` is already `Send + Sync` in pyo3 0.26+, so the
+/// wrapper needs no unsafe impls.
 pub struct WrappedPyErr(pub PyErr);
 
 impl std::fmt::Debug for WrappedPyErr {
@@ -28,11 +28,6 @@ impl std::fmt::Display for WrappedPyErr {
 }
 
 impl std::error::Error for WrappedPyErr {}
-
-// SAFETY: PyErr is Send. We implement Sync because WrappedPyErr is only
-// accessed while holding the GIL (via Python::attach), which provides
-// the necessary synchronization.
-unsafe impl Sync for WrappedPyErr {}
 
 pub fn pyerr_to_io(err: &PyErr) -> io::Error {
     Python::attach(|py| io::Error::other(WrappedPyErr(err.clone_ref(py))))
