@@ -9,6 +9,7 @@ Statuses: `pending` → `in_progress` → `done` | `skipped (<reason>)` | `block
 
 | # | Task | Priority | Status | Commit | Notes |
 |---|------|----------|--------|--------|-------|
+| 0 | Benchmark gate tool (benches/perf_gate.py) | high | pending | — | |
 | 1 | Bug: postprocessor lost from the 3rd repeated element on | critical | pending | — | |
 | 2 | Bug: junk before/after the root element is accepted | critical | pending | — | |
 | 3 | Bug: `\n`/`\t`/`\r` in attributes are not escaped | critical | pending | — | |
@@ -28,11 +29,12 @@ Statuses: `pending` → `in_progress` → `done` | `skipped (<reason>)` | `block
 
 ## Benchmarks
 
-Record the output of `benches/accurate_benchmark.py` (parse/unparse medians) at the checkpoints:
+Gate numbers come from `benches/perf_gate.py` (per-case median_us + spread, JSON in /tmp, printed numbers copied here); `accurate_benchmark.py` speedups vs xmltodict are recorded only as README-facing numbers. Run-to-run P50 drift of accurate_benchmark.py reaches ~9% on identical code (measured 2026-08-13) — never use it as a gate.
 
 | Checkpoint | parse | unparse | Comment |
 |------------|-------|---------|---------|
-| Baseline (before Task 1) | — | — | measure before starting |
+| README baseline | 6.23x | 8.76x | avg speedup vs xmltodict, accurate_benchmark.py, 2026-08-13 (README-facing only) |
+| perf_gate baseline (Task 0) | — | — | /tmp/perf-baseline.json; paste printed medians here |
 | After Task 7 (upgrade) | — | — | quick-xml 0.41 must not regress |
 | After Task 11 | — | — | zero delta acceptable (unsafe removal) |
 | After Task 12 | — | — | baseline of the perf series |

@@ -27,7 +27,170 @@ cargo clippy --all-targets
 
 **Commit rules:** no co-author trailers, straight quotes, messages in English.
 
-**Rule for optimizations (Tasks 11-14):** every perf task must be confirmed by a benchmark — run `benches/accurate_benchmark.py` BEFORE and AFTER, record both numbers in the ledger ("Benchmarks" table). No measurable win and no other benefit (simplification, unsafe removal) — revert. The final "what was optimized and by how much" summary is assembled in Task 16 (the "Optimization results" section of the ledger).
+**Rule for optimizations (Tasks 7, 11-14):** every perf change is gated by `benches/perf_gate.py` (added in Task 0): run `measure` BEFORE and AFTER the change, then `compare`; record the per-case numbers in the ledger ("Benchmarks" section). A delta counts as a win/regression only when it exceeds the noise band (per-case spread of repeat medians, floor 2%). Single-run `accurate_benchmark.py` speedups are NOT gate evidence — its run-to-run P50 drift reaches ~9% (measured 2026-08-13); it stays only for README-facing speedup-vs-xmltodict numbers. No confirmed win and no other benefit (simplification, unsafe removal) — revert. The final "what was optimized and by how much" summary is assembled in Task 16 (the "Optimization results" section of the ledger).
+
+---
+
+## Task 0: Benchmark gate tool (benches/perf_gate.py)
+
+`benches/accurate_benchmark.py` is unsuitable for gating small deltas: run-to-run P50 drift of xmltodict_rs reaches ~9% at identical code (measured 2026-08-13), the speedup metric divides by a concurrently-noisy xmltodict measurement, the headline number is an outlier-sensitive mean, the large-XML document embeds `time.time()` (non-deterministic data), and there is no machine-readable output. It stays as the README-facing comparison against the reference. For gating perf tasks, add a dedicated A/B tool that measures only absolute xmltodict_rs timings.
+
+**Files:**
+- Create: `benches/perf_gate.py`
+
+**Step 1: Implement**
+
+```python
+"""A/B performance gate: absolute timings of xmltodict_rs only.
+
+Methodology: fixed deterministic documents; per case, REPEATS independent
+runs of LOOP_SECONDS each, median per run; the case metric is the median of
+run medians, and the min..max spread of run medians is the noise band.
+
+Usage:
+    python benches/perf_gate.py measure out.json
+    python benches/perf_gate.py compare before.json after.json
+"""
+
+import gc
+import json
+import statistics
+import sys
+import time
+
+import xmltodict_rs
+
+REPEATS = 5
+LOOP_SECONDS = 1.0
+WARMUP_SECONDS = 0.5
+NOISE_FLOOR_PCT = 2.0
+
+
+def build_docs() -> dict[str, str]:
+    """Deterministic documents: small config, medium catalog, large records."""
+    small = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<root><item id="1">Small test</item>'
+        "<config><debug>true</debug><timeout>30</timeout></config></root>"
+    )
+    medium_items = "".join(
+        f'<product id="{i}" category="test">'
+        f"<name>Product {i}</name><price>{10.0 + i}</price>"
+        f"<description>Description {i}</description>"
+        f'<available>{"true" if i % 2 == 0 else "false"}</available></product>'
+        for i in range(50)
+    )
+    medium = f'<?xml version="1.0" encoding="utf-8"?><catalog>{medium_items}</catalog>'
+    large_items = "".join(
+        f'<record id="{i}" type="data" priority="{i % 5}" category="cat{i % 10}" '
+        f'status="active" created="2024-01-{(i % 30) + 1:02d}">'
+        f"<title>Record Title {i}</title>"
+        f'<content>{"Long content text " * 5} for record {i}</content>'
+        f"<tags><tag>tag{i % 7}</tag><tag>category{i % 5}</tag></tags>"
+        f"</record>"
+        for i in range(200)
+    )
+    large = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        f'<database version="2.0">{large_items}</database>'
+    )
+    return {"small": small, "medium": medium, "large": large}
+
+
+def run_median(func, arg, seconds: float) -> float:
+    """One run: tight loop for `seconds`, returns the median call time."""
+    times = []
+    deadline = time.perf_counter() + seconds
+    while time.perf_counter() < deadline:
+        t0 = time.perf_counter()
+        func(arg)
+        times.append(time.perf_counter() - t0)
+    return statistics.median(times)
+
+
+def measure(out_path: str) -> None:
+    """Measure all cases, print a summary, write JSON to out_path."""
+    results = {}
+    for name, xml in build_docs().items():
+        parsed = xmltodict_rs.parse(xml)
+        for kind, func, arg in (
+            ("parse", xmltodict_rs.parse, xml),
+            ("unparse", xmltodict_rs.unparse, parsed),
+        ):
+            run_median(func, arg, WARMUP_SECONDS)
+            gc.disable()
+            try:
+                medians = [run_median(func, arg, LOOP_SECONDS) for _ in range(REPEATS)]
+            finally:
+                gc.enable()
+            med = statistics.median(medians)
+            spread_pct = (max(medians) - min(medians)) / med * 100
+            results[f"{name}-{kind}"] = {"median_us": med * 1e6, "spread_pct": spread_pct}
+            print(f"{name}-{kind}: {med * 1e6:.2f}us (spread {spread_pct:.1f}%)")
+    with open(out_path, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"written: {out_path}")
+
+
+def compare(before_path: str, after_path: str) -> None:
+    """Per-case delta with a noise verdict; negative delta means faster."""
+    with open(before_path) as f:
+        before = json.load(f)
+    with open(after_path) as f:
+        after = json.load(f)
+    print(f"{'case':<18} {'before us':>10} {'after us':>10} {'delta':>8}  verdict")
+    for case, b in before.items():
+        a = after.get(case)
+        if a is None:
+            print(f"{case:<18} missing in after")
+            continue
+        delta_pct = (a["median_us"] - b["median_us"]) / b["median_us"] * 100
+        threshold = max(b["spread_pct"], a["spread_pct"], NOISE_FLOOR_PCT)
+        if delta_pct <= -threshold:
+            verdict = "FASTER"
+        elif delta_pct >= threshold:
+            verdict = "SLOWER"
+        else:
+            verdict = f"noise (±{threshold:.1f}%)"
+        print(
+            f"{case:<18} {b['median_us']:>10.2f} {a['median_us']:>10.2f} "
+            f"{delta_pct:>+7.1f}%  {verdict}"
+        )
+
+
+def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == "measure":
+        measure(sys.argv[2])
+    elif len(sys.argv) == 4 and sys.argv[1] == "compare":
+        compare(sys.argv[2], sys.argv[3])
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**Step 2: Validate the tool itself**
+
+Run `measure` twice on the unchanged build and `compare` the two JSONs — every case must land in the noise band (no FASTER/SLOWER verdicts on identical code):
+
+```bash
+.venv/bin/python benches/perf_gate.py measure /tmp/perf-selftest-a.json
+.venv/bin/python benches/perf_gate.py measure /tmp/perf-selftest-b.json
+.venv/bin/python benches/perf_gate.py compare /tmp/perf-selftest-a.json /tmp/perf-selftest-b.json
+```
+
+If any case reports FASTER/SLOWER on identical code, raise REPEATS/LOOP_SECONDS until self-comparison is clean, and note the final constants in the ledger.
+
+Record the baseline JSON for the whole plan: `.venv/bin/python benches/perf_gate.py measure /tmp/perf-baseline.json` and copy the printed numbers into the ledger ("Benchmarks" section).
+
+**Step 3: Commit**
+
+```bash
+git add benches/perf_gate.py
+git commit -m "test: add perf_gate benchmark for A/B gating of optimizations"
+```
 
 ---
 
@@ -519,6 +682,10 @@ Current versions as of 2026-08-12 (crates.io): **pyo3 0.29.2**, **quick-xml 0.41
 - Modify: `src/lib.rs` (Reader config), `src/error.rs` (`map_quick_xml_error`), spot fixes wherever the compiler points
 - Modify: `pyproject.toml` (`build-system.requires`, dev-group maturin)
 
+**Step 0: Benchmark baseline (pre-upgrade build)**
+
+Run: `.venv/bin/python benches/perf_gate.py measure /tmp/perf-before-t7.json` — numbers into the ledger.
+
 **Step 1: Bump versions**
 
 `Cargo.toml`:
@@ -562,7 +729,7 @@ Run: `cargo check 2>&1 | head -50` — fix down the list. Known spots:
 Run: `cargo clippy --all-targets && cargo test && .venv/bin/maturin develop --release && .venv/bin/python -m pytest tests/ -q`
 Expected: all green. Watch out — parse error texts may differ (quick-xml formats messages differently): tests compare the exception **type**, not the text; if some test compared text — relax it to the type.
 
-Run: `.venv/bin/python benches/accurate_benchmark.py` — quick-xml 0.41 must not regress; numbers go into the ledger.
+Run: `.venv/bin/python benches/perf_gate.py measure /tmp/perf-after-t7.json && .venv/bin/python benches/perf_gate.py compare /tmp/perf-before-t7.json /tmp/perf-after-t7.json` — no SLOWER verdicts allowed (quick-xml 0.41 must not regress); numbers go into the ledger.
 
 **Step 4: Commit**
 
@@ -777,7 +944,7 @@ Removes 4 unsafe blocks, the byte-by-byte loop and the 6x over-allocation. Unit 
 
 **Step 0: Benchmark baseline**
 
-Run: `.venv/bin/python benches/accurate_benchmark.py > /tmp/bench-before-t11.txt` — numbers into the ledger (this is also the baseline of the perf series; if Task 7 already re-measured after the upgrade — use that point).
+Run: `.venv/bin/python benches/perf_gate.py measure /tmp/perf-before-t11.json` — numbers into the ledger (if Task 7 already measured `/tmp/perf-after-t7.json`, reuse it as the before-point).
 
 **Step 1: Add edge-case unit tests first**
 
@@ -839,7 +1006,7 @@ Remove the now-unused `from_raw_parts` / `from_utf8_unchecked` imports.
 Run: `cargo test && cargo clippy --all-targets && .venv/bin/maturin develop --release && .venv/bin/python -m pytest tests/ -q`
 Expected: all PASS, no unsafe left in the crate at all.
 
-Run: `.venv/bin/python benches/accurate_benchmark.py > /tmp/bench-after-t11.txt` — compare with `/tmp/bench-before-t11.txt`, delta into the ledger. A regression on unparse is unacceptable (escape is on the unparse hot path); zero delta is acceptable (the task is justified by unsafe removal).
+Run: `.venv/bin/python benches/perf_gate.py measure /tmp/perf-after-t11.json && .venv/bin/python benches/perf_gate.py compare /tmp/perf-before-t11.json /tmp/perf-after-t11.json` — delta into the ledger. A SLOWER verdict on any unparse case is unacceptable (escape is on the unparse hot path); noise verdicts are acceptable (the task is justified by unsafe removal).
 
 **Step 4: Commit**
 
@@ -859,7 +1026,7 @@ Currently `key.to_owned()` (a String allocation) runs for every element/attribut
 
 **Step 1: Benchmark baseline**
 
-Run: `.venv/bin/python benches/accurate_benchmark.py > /tmp/bench-before-t12.txt` (or record the output in the ledger).
+Run: `.venv/bin/python benches/perf_gate.py measure /tmp/perf-before-t12.json` (reuse `/tmp/perf-after-t11.json` if fresh).
 
 **Step 2: Implement**
 
@@ -894,7 +1061,7 @@ Call sites: replace `final_key.as_str()` → `final_key.as_ref()`; `item.set_ite
 **Step 3: Verify + benchmark**
 
 Run: `cargo clippy --all-targets && .venv/bin/maturin develop --release && .venv/bin/python -m pytest tests/ -q`
-Run: `.venv/bin/python benches/accurate_benchmark.py > /tmp/bench-after-t12.txt` — compare with baseline, record the delta in the ledger. No regressions allowed.
+Run: `.venv/bin/python benches/perf_gate.py measure /tmp/perf-after-t12.json && .venv/bin/python benches/perf_gate.py compare /tmp/perf-before-t12.json /tmp/perf-after-t12.json` — record the deltas in the ledger. No SLOWER verdicts allowed.
 
 **Step 4: Commit**
 
@@ -958,7 +1125,7 @@ In `end_element` delete `let element_name = self.build_name(name);` and the `let
 
 Run: `cargo clippy --all-targets && .venv/bin/maturin develop --release && .venv/bin/python -m pytest tests/ -q`
 Namespace tests: `.venv/bin/python -m pytest tests/test_parse_namespaces.py -v` — special attention.
-Run: `.venv/bin/python benches/accurate_benchmark.py > /tmp/bench-after-t13.txt` — delta into the ledger.
+Run: `.venv/bin/python benches/perf_gate.py measure /tmp/perf-after-t13.json && .venv/bin/python benches/perf_gate.py compare /tmp/perf-after-t12.json /tmp/perf-after-t13.json` — deltas into the ledger. No SLOWER verdicts allowed.
 
 **Step 4: Commit**
 
@@ -996,8 +1163,8 @@ Use it in `push_data` (`item.set_item(self.intern_key(py, final_key.as_ref()), .
 **Step 2: Verify + benchmark gate**
 
 Run: `cargo clippy --all-targets && .venv/bin/maturin develop --release && .venv/bin/python -m pytest tests/ -q`
-Run: `.venv/bin/python benches/accurate_benchmark.py > /tmp/bench-after-t14.txt`
-If the parse win is < 5% relative to `/tmp/bench-after-t13.txt` — `git checkout -- src/parser.rs`, mark the task `skipped (no win)` in the ledger.
+Run: `.venv/bin/python benches/perf_gate.py measure /tmp/perf-after-t14.json && .venv/bin/python benches/perf_gate.py compare /tmp/perf-after-t13.json /tmp/perf-after-t14.json`
+Gate: keep only if at least medium-parse and large-parse report FASTER with delta ≥ 5%; otherwise `git checkout -- src/parser.rs`, mark the task `skipped (no win)` in the ledger.
 
 **Step 3: Commit (if the gate passed)**
 
@@ -1098,7 +1265,7 @@ cargo fmt --check && cargo clippy --all-targets && cargo test
 .venv/bin/python benches/accurate_benchmark.py
 ```
 
-Expected: all green; the benchmark is not worse than the Task 12 baseline (record the final numbers in the ledger).
+Expected: all green. Additionally run `.venv/bin/python benches/perf_gate.py measure /tmp/perf-final.json && .venv/bin/python benches/perf_gate.py compare /tmp/perf-baseline.json /tmp/perf-final.json` — the final build must show no SLOWER verdicts vs the Task 0 baseline; record the final numbers in the ledger. `accurate_benchmark.py` output is recorded only as the README-facing speedup vs xmltodict.
 
 **Step 2: Manual smoke of fixed bugs**
 
@@ -1117,7 +1284,7 @@ print('smoke OK')
 
 **Step 3: Optimization results**
 
-Fill in the "Optimization results" section of the ledger: for every perf task (7, 11, 12, 13, 14) — what changed and the parse/unparse delta in percent against baseline (from the "Benchmarks" table); plus a total row "overall vs the pre-work baseline". Format:
+Fill in the "Optimization results" section of the ledger: for every perf task (7, 11, 12, 13, 14) — what changed and the per-case deltas in percent (from the perf_gate JSONs recorded in "Benchmarks"); plus a total row "overall vs the Task 0 baseline" (`compare /tmp/perf-baseline.json /tmp/perf-final.json`). Format:
 
 ```markdown
 | Task | What was optimized | parse | unparse |
