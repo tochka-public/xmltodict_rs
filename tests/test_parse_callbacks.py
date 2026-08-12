@@ -193,3 +193,17 @@ def test_postprocessor_with_namespaces():
     </root>
     """
     compare_parsers(xml, postprocessor=post, process_namespaces=False)
+
+
+def test_postprocessor_applied_to_all_repeated_elements():
+    """Regression: third and later repeats must also get the postprocessed value."""
+
+    def pp(path, key, data):
+        if key == "i" and isinstance(data, str):
+            return key, int(data)
+        return key, data
+
+    xml = "<r><i>1</i><i>2</i><i>3</i><i>4</i></r>"
+    expected = xmltodict.parse(xml, postprocessor=pp)
+    assert expected == {"r": {"i": [1, 2, 3, 4]}}
+    assert xmltodict_rs.parse(xml, postprocessor=pp) == expected

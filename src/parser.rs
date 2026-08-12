@@ -141,15 +141,15 @@ impl XmlParser {
         match item.get_item(final_key.as_str())? {
             Some(existing) => {
                 if let Ok(list) = existing.downcast::<PyList>() {
-                    list.append(data.clone())?;
+                    list.append(final_value)?;
                 } else {
-                    let new_list = PyList::new(py, [existing.clone(), final_value.clone()])?;
+                    let new_list = PyList::new(py, [existing, final_value])?;
                     item.set_item(final_key, &new_list)?;
                 }
             }
             None => {
                 if self.should_force_list(py, final_key.as_str(), final_value.as_ref())? {
-                    let new_list = PyList::new(py, [final_value.clone()])?;
+                    let new_list = PyList::new(py, [final_value])?;
                     item.set_item(final_key, &new_list)?;
                 } else {
                     item.set_item(final_key, final_value)?;
