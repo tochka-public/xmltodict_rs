@@ -1,6 +1,4 @@
 use std::borrow::Cow;
-use std::slice::from_raw_parts;
-use std::str::from_utf8_unchecked;
 
 const LT: u8 = b'<';
 const GT: u8 = b'>';
@@ -12,56 +10,29 @@ const ESCAPED_GT: &str = "&gt;";
 
 pub fn escape_xml(text: &str) -> Cow<'_, str> {
     let bytes = text.as_bytes();
-    let len = bytes.len();
-
-    let need_escape = memchr::memchr3(AMPERSAND, LT, GT, bytes).is_some();
-
-    if !need_escape {
+    let mut positions = memchr::memchr3_iter(AMPERSAND, LT, GT, bytes).peekable();
+    if positions.peek().is_none() {
         return Cow::Borrowed(text);
     }
 
-    let mut i = 0;
-    let mut last_pos = 0;
-    let mut result = String::with_capacity(len * 6);
-
-    let ptr = bytes.as_ptr();
-
-    while i < len {
-        // SAFETY: `ptr` comes from `bytes.as_ptr()` which is valid for reads,
-        // and `i` is bounded by `bytes.len()`, so `ptr.add(i)` is within bounds.
-        let byte = unsafe { *ptr.add(i) };
-        match byte {
-            AMPERSAND | LT | GT => {
-                if last_pos < i {
-                    // SAFETY: The slice from `last_pos` to `i` is valid UTF-8 because
-                    // it's a subslice of the original `text` which is guaranteed to be valid UTF-8.
-                    let slice = unsafe {
-                        from_utf8_unchecked(from_raw_parts(ptr.add(last_pos), i - last_pos))
-                    };
-                    result.push_str(slice);
-                }
-
-                let escaped = match byte {
-                    AMPERSAND => ESCAPED_AMP,
-                    LT => ESCAPED_LT,
-                    _ => ESCAPED_GT,
-                };
-                result.push_str(escaped);
-                last_pos = i + 1;
-            }
-            _ => {}
+    let mut result = String::with_capacity(text.len() + 24);
+    let mut last = 0;
+    for pos in positions {
+        // memchr positions are on ASCII bytes, hence valid char boundaries
+        if let Some(chunk) = text.get(last..pos) {
+            result.push_str(chunk);
         }
-        i += 1;
+        let escaped = match bytes.get(pos) {
+            Some(&AMPERSAND) => ESCAPED_AMP,
+            Some(&LT) => ESCAPED_LT,
+            _ => ESCAPED_GT,
+        };
+        result.push_str(escaped);
+        last = pos + 1;
     }
-
-    if last_pos < len {
-        // SAFETY: The slice from `last_pos` to `bytes.len()` is valid UTF-8 because
-        // it's a subslice of the original `text` which is guaranteed to be valid UTF-8.
-        let slice =
-            unsafe { from_utf8_unchecked(from_raw_parts(ptr.add(last_pos), len - last_pos)) };
-        result.push_str(slice);
+    if let Some(tail) = text.get(last..) {
+        result.push_str(tail);
     }
-
     Cow::Owned(result)
 }
 
@@ -136,5 +107,20 @@ mod tests {
     #[test]
     fn test_escape_xml_attr_control_chars() {
         assert_eq!("a&#10;b&#9;c&#13;d", escape_xml_attr("a\nb\tc\rd"));
+    }
+
+    #[test]
+    fn test_escape_xml_all_special() {
+        assert_eq!("&amp;&lt;&gt;", escape_xml("&<>"));
+    }
+
+    #[test]
+    fn test_escape_xml_multibyte_around_special() {
+        assert_eq!("привет &amp; мир", escape_xml("привет & мир"));
+    }
+
+    #[test]
+    fn test_escape_xml_empty() {
+        assert_eq!("", escape_xml(""));
     }
 }
