@@ -71,7 +71,7 @@ pub fn escape_xml_attr(text: &str) -> Cow<'_, str> {
 
     for (i, ch) in text.char_indices() {
         match ch {
-            '&' | '<' | '>' | '"' => {
+            '&' | '<' | '>' | '"' | '\n' | '\t' | '\r' => {
                 let is_first_escape = result.is_none();
                 let s = result.get_or_insert_with(|| {
                     let mut output = String::with_capacity(text.len() + 20);
@@ -85,7 +85,10 @@ pub fn escape_xml_attr(text: &str) -> Cow<'_, str> {
                     '&' => "&amp;",
                     '<' => "&lt;",
                     '>' => "&gt;",
-                    _ => "&quot;",
+                    '"' => "&quot;",
+                    '\n' => "&#10;",
+                    '\t' => "&#9;",
+                    _ => "&#13;",
                 };
                 s.push_str(escaped);
                 last_pos = i + ch.len_utf8();
@@ -128,5 +131,10 @@ mod tests {
             "value with &quot;quotes&quot; and &amp;",
             escape_xml_attr("value with \"quotes\" and &")
         );
+    }
+
+    #[test]
+    fn test_escape_xml_attr_control_chars() {
+        assert_eq!("a&#10;b&#9;c&#13;d", escape_xml_attr("a\nb\tc\rd"));
     }
 }

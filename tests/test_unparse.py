@@ -406,3 +406,16 @@ STR_SUBCLASS_OBJECTS = [
 @pytest.mark.parametrize("obj", STR_SUBCLASS_OBJECTS)
 def test_unparse_str_subclass(obj):
     compare_unparse(obj)
+
+
+def test_attr_control_chars_escaped():
+    d = {"root": {"@a": "x\ny\tz\rw"}}
+    ref = xmltodict.unparse(d, full_document=False)
+    rs = xmltodict_rs.unparse(d, full_document=False)
+    assert rs == ref
+    assert "&#10;" in rs and "&#9;" in rs and "&#13;" in rs
+
+
+def test_attr_control_chars_roundtrip():
+    d = {"root": {"@a": "line1\nline2"}}
+    assert xmltodict_rs.parse(xmltodict_rs.unparse(d)) == d
