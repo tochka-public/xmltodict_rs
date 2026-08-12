@@ -1254,6 +1254,41 @@ git commit -m "test: add property-based roundtrip tests and deep-nesting coverag
 
 ---
 
+## Task 17: CI/CD update and improvements
+
+Execution order: after Task 15, BEFORE Task 16 (the final gate must see the updated pipeline). Numbered 17 to avoid renumbering the already-executed tasks.
+
+Bring `.github/workflows/CI.yml` in line with the changes from Tasks 0-15 and harden the pipeline. Inspect the current workflow first and adapt — the items below are requirements, not literal patches.
+
+**Files:**
+- Modify: `.github/workflows/CI.yml` (and any sibling workflow files that reference the same tooling)
+
+**Step 1: Inventory**
+
+Read `.github/workflows/CI.yml`. Note: toolchain setup steps, maturin-action usage, python version matrix, which lint/test gates exist, caching.
+
+**Step 2: Requirements**
+
+1. **Toolchain**: pyo3 0.29 / quick-xml 0.41 may raise MSRV; `rust-toolchain.toml` pins 1.91.0. CI must build with the pinned toolchain (e.g. `dtolnay/rust-toolchain` reading `rust-toolchain.toml`), not an unpinned `@master` default.
+2. **Gates**: a job must run `cargo fmt --check`, `cargo clippy --all-targets` (deny-warnings lives in Cargo.toml), `cargo test`, plus `ruff check .` and `ruff format --check .` (via uv). Add whatever is missing.
+3. **maturin**: pyproject now requires `maturin>=1.14` — verify maturin-action resolves a compatible maturin on every matrix target; pin only if resolution fails.
+4. **Tests**: pytest steps must install the dependency groups including `hypothesis` (added in Task 15) so property tests run in CI; keep the free-threaded 3.13t/3.14t jobs and the platform matrix intact.
+5. **Caching**: add Rust build caching (`Swatinem/rust-cache` or actions/cache over ~/.cargo + target/) to lint/test jobs where it shortens runs; do not cache into release wheel builds if it risks stale artifacts.
+6. **Benchmarks stay OUT of CI** — shared runners are too noisy for perf gating (see Task 0 rationale); if tempted, leave a YAML comment saying why not.
+
+**Step 3: Validate**
+
+`actionlint` if available (`brew install actionlint` or `npx actionlint`); otherwise at minimum parse-check the YAML and self-review the matrix consistency. Note in the report which validation ran.
+
+**Step 4: Commit**
+
+```bash
+git add .github/workflows/
+git commit -m "ci: pin toolchain, add lint gates and rust caching after review fixes"
+```
+
+---
+
 ## Task 16: Final verification
 
 **Step 1: Full gate**
