@@ -240,3 +240,12 @@ def test_whitespace_outside_root_is_legal(xml):
     assert xmltodict_rs.parse(xml, strip_whitespace=False) == xmltodict.parse(
         xml, strip_whitespace=False
     )
+
+
+def test_deeply_nested_parse():
+    depth = 50_000
+    xml = "<x>" * depth + "</x>" * depth
+    result = xmltodict_rs.parse(xml)
+    for _ in range(depth - 1):
+        result = result["x"]
+    assert result == {"x": None}
