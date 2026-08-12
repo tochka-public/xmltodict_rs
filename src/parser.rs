@@ -202,7 +202,11 @@ impl XmlParser {
         name: &str,
         attrs: &[quick_xml::events::attributes::Attribute],
     ) -> PyResult<()> {
-        let mut current_ns_map = self.namespace_stack.last().cloned().unwrap_or_default();
+        let mut current_ns_map = if self.config.process_namespaces {
+            self.namespace_stack.last().cloned().unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
 
         let element_dict = PyDict::new(py);
         let mut set_xmlns_item = false;
@@ -266,7 +270,9 @@ impl XmlParser {
             element_dict.set_item(xmlns_key, ns_py)?;
         }
 
-        self.namespace_stack.push(current_ns_map);
+        if self.config.process_namespaces {
+            self.namespace_stack.push(current_ns_map);
+        }
 
         if self.config.xml_attribs {
             for (key, value) in normal_attrs {
@@ -313,9 +319,7 @@ impl XmlParser {
         Ok(())
     }
 
-    pub fn end_element(&mut self, py: Python, name: &str) -> PyResult<()> {
-        let element_name = self.build_name(name);
-
+    pub fn end_element(&mut self, py: Python) -> PyResult<()> {
         let Some(current_element) = self.stack.pop() else {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
@@ -325,7 +329,7 @@ impl XmlParser {
         let Some(_) = self.text_run_open.pop() else {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
-        let Some(_) = self.path.pop() else {
+        let Some(element_name) = self.path.pop() else {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
 
@@ -406,9 +410,9 @@ impl XmlParser {
             self.push_data(py, parent_dict, &element_name, final_value.bind(py))?;
         }
 
-        let Some(_) = self.namespace_stack.pop() else {
+        if self.config.process_namespaces && self.namespace_stack.pop().is_none() {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
-        };
+        }
 
         Ok(())
     }

@@ -134,7 +134,7 @@ fn parse_xml_with_reader<R: BufRead>(
             Ok(Event::End(ref e)) => {
                 let name = utf8_str(e.name().into_inner())?;
                 validate_element_name(py, name)?;
-                parser.end_element(py, name)?;
+                parser.end_element(py)?;
                 if parser.path.is_empty() {
                     root_closed = true;
                 }
@@ -151,7 +151,7 @@ fn parse_xml_with_reader<R: BufRead>(
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|e| expat_error(py, e.to_string()))?;
                 parser.start_element(py, name, &attrs)?;
-                parser.end_element(py, name)?;
+                parser.end_element(py)?;
                 if parser.path.is_empty() {
                     root_closed = true;
                 }
