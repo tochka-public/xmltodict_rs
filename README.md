@@ -125,8 +125,24 @@ Based on benchmarks with various XML sizes:
 | Operation | Small (0.3KB) | Medium (15KB) | Large (150KB) |
 |-----------|---------------|---------------|---------------|
 | Parse     | ~8x faster    | ~6x faster    | ~5x faster    |
-| Unparse   | ~10x faster   | ~8x faster    | ~7x faster    |
+| Unparse   | ~10x faster   | ~11x faster   | ~10x faster   |
 
+Measured with `benches/accurate_benchmark.py` against `xmltodict`; run-to-run
+variance on this methodology is up to ~9% (see `docs/plans/` for raw
+numbers), so treat the figures as an order-of-magnitude guide, not an SLA.
+
+## Known Limitations
+
+The following inputs are accepted by upstream `xmltodict` but are not
+implemented in `xmltodict_rs`. Calling `parse()`/`unparse()` with them raises
+`NotImplementedError` instead of silently diverging from expected behavior:
+
+- **Streaming mode** — `item_depth > 0` or a non-`None` `item_callback` in
+  `parse()`. Only whole-document parsing is supported.
+- **`disable_entities=False`** in `parse()` — DTD entity expansion is not
+  implemented; entities are always treated as disabled (the safe default).
+- **Non-UTF-8 `encoding`** in `parse()` — only UTF-8 input is supported;
+  passing any other `encoding` value raises `NotImplementedError`.
 
 ## Development
 

@@ -41,10 +41,12 @@ match the same-numbered reference version. Public OSS
   (`PyGeneratorRead`) → fallback `extract::<&[u8]>`; quick-xml event loop →
   `XmlParser`; `Event::GeneralRef` (entity/char refs, quick-xml 0.41+) resolved
   via `resolve_general_ref`; final stack-balance validation.
-- `src/parser.rs` — `XmlParser`: four synchronized stacks — `stack` (PyDict),
-  `path` (element names), `text_stack`, `namespace_stack`; `push_data`
-  (repeated key → list; `force_list`; `postprocessor`); `build_name`
-  (namespace mapping via `namespaces`).
+- `src/parser.rs` — `XmlParser`: five parallel per-element structures —
+  `stack` (PyDict), `path` (element names), `text_stack`, `text_run_open`
+  (tracks whether the current element's last text fragment is still
+  coalescible), `namespace_stack` (pushed only when `process_namespaces` is
+  on); `push_data` (repeated key → list; `force_list`; `postprocessor`);
+  `build_name` (namespace mapping via `namespaces`).
 - `src/unparser.rs` — `XmlWriter`: recursive `write_element`/
   `write_dict_element`; value-type branch order: None → str → dict →
   iterable → bool → `str()` fallback; `preprocessor`.
@@ -73,25 +75,29 @@ match the same-numbered reference version. Public OSS
   trimming per-event would eat whitespace adjacent to every entity.
   `strip_whitespace` is instead applied once in `XmlParser::end_element`, on
   the fully joined text of an element.
-- **The four `XmlParser` stacks move strictly in sync** in
-  `start_element`/`end_element`; desync → "unclosed element(s)" at the end of
+- **The five `XmlParser` structures move strictly in sync** in
+  `start_element`/`end_element` (`namespace_stack` only when
+  `process_namespaces` is on); desync → "unclosed element(s)" at the end of
   `parse_xml_with_reader`.
 - **`gil_used = false`**: the module is declared safe for free-threaded
   CPython (3.13t/3.14t) — no global mutable state without synchronization;
   parser state is per-call only.
 - **mimalloc** — global allocator only on linux-x86_64 / windows-x86_64 /
   macos (feature `mimalloc`, default on).
-- **`panic = "abort"` in the release profile** — a panic in any dependency
-  kills the whole Python process; the review plan schedules a switch to
-  unwind (Task 8 of the 2026-08-12 plan).
+- **Release profile unwinds** (no `panic = "abort"` override in
+  `[profile.release]`) — a panic in any dependency raises Python's
+  `PanicException` instead of killing the process; catchable like any other
+  exception.
 - **Lints are a hard gate**: `warnings = deny`, clippy `all`+`pedantic` =
   deny, bans on `unwrap`/`expect`/`panic`/indexing/casts — see `[lints]` in
   `Cargo.toml`. Do not add `#[allow]` in production code — fix the cause.
-- **Known limitations** (review 2026-08-12): streaming
-  (`item_depth`/`item_callback`) is not implemented; non-UTF-8 encodings are
-  not supported; `disable_entities=False` does not expand DTD entities.
-  Confirmed bugs and the fix plan — `docs/plans/2026-08-12-review-fixes.md`
-  + the ledger next to it; update this item once the plan is done.
+- **Known limitations** (stable as of the 2026-08-12 review-fixes plan,
+  completed): streaming (`item_depth > 0` / non-`None` `item_callback`),
+  `disable_entities=False`, and non-UTF-8 `encoding` in `parse()` all raise
+  `NotImplementedError` instead of silently diverging — see README "Known
+  Limitations". Adding real support for any of them is a new feature, not a
+  bug fix — track it as a fresh plan, not an amendment to
+  `docs/plans/2026-08-12-review-fixes.md` (closed).
 - **Performance changes are not accepted without a benchmark**: measure
   `just bench` before and after, record the numbers in the active plan's
   ledger; no win — revert.
