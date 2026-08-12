@@ -39,7 +39,8 @@ match the same-numbered reference version. Public OSS
 - `src/lib.rs` — pyfunctions `parse`/`unparse`; input dispatch: str (UTF-8
   bytes, zero-copy) → bytes → file-like (`PyFileLikeRead`) → generator
   (`PyGeneratorRead`) → fallback `extract::<&[u8]>`; quick-xml event loop →
-  `XmlParser`; final stack-balance validation.
+  `XmlParser`; `Event::GeneralRef` (entity/char refs, quick-xml 0.41+) resolved
+  via `resolve_general_ref`; final stack-balance validation.
 - `src/parser.rs` — `XmlParser`: four synchronized stacks — `stack` (PyDict),
   `path` (element names), `text_stack`, `namespace_stack`; `push_data`
   (repeated key → list; `force_list`; `postprocessor`); `build_name`
@@ -65,9 +66,13 @@ match the same-numbered reference version. Public OSS
 - **`parse`/`unparse` signatures live in three places**: `#[pyo3(signature)]`
   in `lib.rs`, stubs in `python/xmltodict_rs/__init__.pyi`, README "API
   Reference". Change all three in sync.
-- **quick-xml Reader config**: `trim_text = strip_whitespace`,
-  `expand_empty_elements = true` — the `Event::Empty` branch never fires
-  because of that, but its code must stay correct.
+- **quick-xml Reader config**: `expand_empty_elements = true` — the
+  `Event::Empty` branch never fires because of that, but its code must stay
+  correct. `trim_text` is intentionally left at its default (off): quick-xml
+  0.41 reports `&entity;`/`&#NN;` as standalone `Event::GeneralRef` events, so
+  trimming per-event would eat whitespace adjacent to every entity.
+  `strip_whitespace` is instead applied once in `XmlParser::end_element`, on
+  the fully joined text of an element.
 - **The four `XmlParser` stacks move strictly in sync** in
   `start_element`/`end_element`; desync → "unclosed element(s)" at the end of
   `parse_xml_with_reader`.

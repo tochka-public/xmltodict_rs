@@ -39,6 +39,32 @@ use std::io::{BufRead, BufReader};
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+/// Decode UTF-8 bytes, mapping invalid sequences to `UnicodeDecodeError`
+/// (matches the automatic `From<std::str::Utf8Error>` conversion that pyo3
+/// provided before 0.29 removed it).
+fn utf8_str(bytes: &[u8]) -> PyResult<&str> {
+    std::str::from_utf8(bytes)
+        .map_err(|e| pyo3::exceptions::PyUnicodeDecodeError::new_err(e.to_string()))
+}
+
+/// Resolve a `&entity;` / `&#NN;` general reference (quick-xml 0.41 reports
+/// these as standalone events instead of embedding them in `Event::Text`).
+/// Only character references and the five predefined XML entities are
+/// resolved -- DTD-declared custom entities stay unsupported, matching
+/// `disable_entities=False` being unimplemented.
+fn resolve_general_ref(py: Python, r: &quick_xml::events::BytesRef) -> PyResult<String> {
+    if let Some(ch) = r
+        .resolve_char_ref()
+        .map_err(|e| map_quick_xml_error(py, e))?
+    {
+        return Ok(ch.to_string());
+    }
+    let name = r.decode().map_err(|e| expat_error(py, e.to_string()))?;
+    quick_xml::escape::resolve_predefined_entity(&name)
+        .map(str::to_owned)
+        .ok_or_else(|| expat_error(py, format!("undefined entity &{name};")))
+}
+
 fn is_generator(py: Python, xml_input: &Bound<'_, PyAny>) -> PyResult<bool> {
     let types = PyModule::import(py, "types")?;
     let generator_type = types.getattr("GeneratorType")?;
@@ -46,18 +72,18 @@ fn is_generator(py: Python, xml_input: &Bound<'_, PyAny>) -> PyResult<bool> {
 }
 
 fn extract_hashmap(py: Python, dict_input: &Py<PyAny>) -> PyResult<HashMap<String, String>> {
-    let dict = dict_input.downcast_bound::<PyDict>(py).map_err(|_err| {
+    let dict = dict_input.cast_bound::<PyDict>(py).map_err(|_err| {
         PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespaces must be a dictionary")
     })?;
 
     let mut hashmap = HashMap::with_capacity(dict.len());
 
     for (key, value) in dict {
-        let key_str = key.downcast::<PyString>().map_err(|_err| {
+        let key_str = key.cast::<PyString>().map_err(|_err| {
             PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace keys must be strings")
         })?;
 
-        let value_str = value.downcast::<PyString>().map_err(|_err| {
+        let value_str = value.cast::<PyString>().map_err(|_err| {
             PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace values must be strings")
         })?;
 
@@ -73,16 +99,20 @@ fn parse_xml_with_reader<R: BufRead>(
     config: &ParseConfig,
     force_list: Option<Py<PyAny>>,
     postprocessor: Option<Py<PyAny>>,
-    strip_whitespace: bool,
     process_comments: bool,
 ) -> PyResult<Py<PyAny>> {
     let mut parser = XmlParser::new(config.clone(), force_list, postprocessor);
     let mut xml_reader = Reader::from_reader(reader);
-    xml_reader
-        .trim_text(strip_whitespace)
-        .check_end_names(true)
-        .check_comments(true)
-        .expand_empty_elements(true);
+    let reader_config = xml_reader.config_mut();
+    // Whitespace stripping is handled ourselves in `XmlParser::end_element` on the
+    // fully joined text of an element, not per-event here: quick-xml 0.41 reports
+    // `&entity;`/`&#NN;` references as standalone `Event::GeneralRef` events, so a
+    // text run like "a &amp; b" now arrives as three events ("a ", GeneralRef, " b")
+    // instead of one. Trimming each event individually (the pre-0.41 approach) would
+    // eat the whitespace adjacent to every entity instead of just the run's edges.
+    reader_config.check_end_names = true;
+    reader_config.check_comments = true;
+    reader_config.expand_empty_elements = true;
 
     let mut buf = Vec::with_capacity(128);
     let mut root_closed = false;
@@ -93,7 +123,7 @@ fn parse_xml_with_reader<R: BufRead>(
                 if root_closed {
                     return Err(expat_error(py, "junk after document element".to_owned()));
                 }
-                let name = std::str::from_utf8(e.name().into_inner())?;
+                let name = utf8_str(e.name().into_inner())?;
                 validate_element_name(py, name)?;
                 let attrs: Vec<_> = e
                     .attributes()
@@ -102,7 +132,7 @@ fn parse_xml_with_reader<R: BufRead>(
                 parser.start_element(py, name, &attrs)?;
             }
             Ok(Event::End(ref e)) => {
-                let name = std::str::from_utf8(e.name().into_inner())?;
+                let name = utf8_str(e.name().into_inner())?;
                 validate_element_name(py, name)?;
                 parser.end_element(py, name)?;
                 if parser.path.is_empty() {
@@ -113,7 +143,7 @@ fn parse_xml_with_reader<R: BufRead>(
                 if root_closed {
                     return Err(expat_error(py, "junk after document element".to_owned()));
                 }
-                let name = std::str::from_utf8(e.name().into_inner())?;
+                let name = utf8_str(e.name().into_inner())?;
                 validate_element_name(py, name)?;
 
                 let attrs: Vec<_> = e
@@ -127,7 +157,7 @@ fn parse_xml_with_reader<R: BufRead>(
                 }
             }
             Ok(Event::Text(ref e)) => {
-                let text = e.unescape().map_err(|e| expat_error(py, e.to_string()))?;
+                let text = e.decode().map_err(|e| expat_error(py, e.to_string()))?;
                 if parser.path.is_empty() && !text.trim().is_empty() {
                     let msg = if root_closed {
                         "junk after document element"
@@ -138,14 +168,26 @@ fn parse_xml_with_reader<R: BufRead>(
                 }
                 parser.characters(&text);
             }
+            Ok(Event::GeneralRef(ref e)) => {
+                if parser.path.is_empty() {
+                    let msg = if root_closed {
+                        "junk after document element"
+                    } else {
+                        "syntax error"
+                    };
+                    return Err(expat_error(py, msg.to_owned()));
+                }
+                let resolved = resolve_general_ref(py, e)?;
+                parser.characters(&resolved);
+            }
             Ok(Event::CData(ref e)) => {
                 if parser.path.is_empty() {
                     return Err(expat_error(py, "junk after document element".to_owned()));
                 }
-                parser.characters(std::str::from_utf8(e.as_ref())?);
+                parser.characters(utf8_str(e.as_ref())?);
             }
             Ok(Event::Comment(ref e)) if process_comments => {
-                parser.comment(py, std::str::from_utf8(e.as_ref())?)?;
+                parser.comment(py, utf8_str(e.as_ref())?)?;
             }
             Ok(Event::Eof) => {
                 break;
@@ -250,7 +292,7 @@ fn parse(
         namespaces: namespaces_rs,
     };
 
-    if let Ok(xml_str) = xml_input.downcast::<PyString>() {
+    if let Ok(xml_str) = xml_input.cast::<PyString>() {
         let text = xml_str.to_str()?;
         return parse_xml_with_reader(
             py,
@@ -258,19 +300,17 @@ fn parse(
             &config,
             force_list,
             postprocessor,
-            strip_whitespace,
             process_comments,
         );
     }
 
-    if let Ok(xml_bytes) = xml_input.downcast::<PyBytes>() {
+    if let Ok(xml_bytes) = xml_input.cast::<PyBytes>() {
         return parse_xml_with_reader(
             py,
             xml_bytes.as_bytes(),
             &config,
             force_list,
             postprocessor,
-            strip_whitespace,
             process_comments,
         );
     }
@@ -284,7 +324,6 @@ fn parse(
                 &config,
                 force_list,
                 postprocessor,
-                strip_whitespace,
                 process_comments,
             );
         }
@@ -298,7 +337,6 @@ fn parse(
             &config,
             force_list,
             postprocessor,
-            strip_whitespace,
             process_comments,
         );
     }
@@ -310,7 +348,6 @@ fn parse(
         &config,
         force_list,
         postprocessor,
-        strip_whitespace,
         process_comments,
     )
 }

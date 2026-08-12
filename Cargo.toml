@@ -11,10 +11,10 @@ name = "xmltodict_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-mimalloc = { version = "0.1", optional = true, features = ["local_dynamic_tls"]  }
-pyo3 = { version = "0.26", features = ["extension-module", "generate-import-lib"] }
-quick-xml = { version = "0.31", features = ["serialize"] }
-memchr  = { version = "2.7", default-features = false }
+mimalloc = { version = "0.1.52", optional = true, features = ["local_dynamic_tls"]  }
+pyo3 = { version = "0.29", features = ["extension-module", "generate-import-lib"] }
+quick-xml = "0.41"
+memchr  = { version = "2.8", default-features = false }
 stacker = "0.1"
 
 [features]

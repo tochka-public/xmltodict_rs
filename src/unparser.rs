@@ -54,7 +54,7 @@ impl XmlWriter {
                 return Ok(None);
             }
 
-            let tuple = result.bind(py).downcast::<PyTuple>()?;
+            let tuple = result.bind(py).cast::<PyTuple>()?;
             final_key = tuple.get_item(0)?.extract::<String>()?;
             final_value = tuple.get_item(1)?;
         }
@@ -131,7 +131,7 @@ impl XmlWriter {
         }
 
         // Check if value is a dict (element with attributes/children)
-        if let Ok(str) = final_value.downcast::<PyString>() {
+        if let Ok(str) = final_value.cast::<PyString>() {
             if str.len()? == 0 {
                 if self.config.short_empty_elements {
                     XmlWriter::push_short_empty_tag(&mut self.output, final_tag.as_str());
@@ -150,7 +150,7 @@ impl XmlWriter {
             return Ok(());
         }
 
-        if let Ok(dict) = final_value.downcast::<PyDict>() {
+        if let Ok(dict) = final_value.cast::<PyDict>() {
             self.write_dict_element(py, final_tag.as_str(), dict)?;
         } else if let Ok(iter) = final_value.try_iter() {
             for (i, item) in iter.enumerate() {
@@ -191,7 +191,7 @@ impl XmlWriter {
                     } else {
                         "false".to_owned()
                     }
-                } else if let Ok(py_str) = value.downcast::<PyString>() {
+                } else if let Ok(py_str) = value.cast::<PyString>() {
                     py_str.to_str()?.to_owned()
                 } else {
                     value.str()?.to_string()
@@ -204,7 +204,7 @@ impl XmlWriter {
                     } else {
                         "false".to_owned()
                     }
-                } else if let Ok(py_str) = value.downcast::<PyString>() {
+                } else if let Ok(py_str) = value.cast::<PyString>() {
                     py_str.to_str()?.to_owned()
                 } else {
                     value.str()?.to_string()

@@ -46,7 +46,7 @@ impl PyGeneratorRead {
                 ));
             }
 
-            if let Ok(chunk_str) = chunk.downcast::<PyString>() {
+            if let Ok(chunk_str) = chunk.cast::<PyString>() {
                 if !chunk_str
                     .to_str()
                     .map_err(|err| pyerr_to_io(&err))?
@@ -57,14 +57,14 @@ impl PyGeneratorRead {
                 continue;
             }
 
-            if let Ok(chunk_bytes) = chunk.downcast::<PyBytes>() {
+            if let Ok(chunk_bytes) = chunk.cast::<PyBytes>() {
                 if !chunk_bytes.as_bytes().is_empty() {
                     return Ok(Some(chunk));
                 }
                 continue;
             }
 
-            if let Ok(chunk_bytearray) = chunk.downcast::<PyByteArray>() {
+            if let Ok(chunk_bytearray) = chunk.cast::<PyByteArray>() {
                 let bytes_vec = chunk_bytearray.to_vec();
                 if !bytes_vec.is_empty() {
                     self.bytearray_buffer = Some(bytes_vec);
@@ -73,11 +73,11 @@ impl PyGeneratorRead {
                 continue;
             }
 
-            if let Ok(chunk_memview) = chunk.downcast::<PyMemoryView>() {
+            if let Ok(chunk_memview) = chunk.cast::<PyMemoryView>() {
                 let bytes_obj = chunk_memview
                     .call_method0("tobytes")
                     .map_err(|err| pyerr_to_io(&err))?;
-                let bytes = bytes_obj.downcast::<PyBytes>().map_err(|_err| {
+                let bytes = bytes_obj.cast::<PyBytes>().map_err(|_err| {
                     pyerr_to_io(&PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                         "a bytes-like object or str is required, not 'memoryview'",
                     ))
@@ -88,7 +88,9 @@ impl PyGeneratorRead {
                 continue;
             }
 
-            let bytes = chunk.extract::<&[u8]>().map_err(|err| pyerr_to_io(&err))?;
+            let bytes = chunk
+                .extract::<&[u8]>()
+                .map_err(|err| pyerr_to_io(&PyErr::from(err)))?;
             if !bytes.is_empty() {
                 return Ok(Some(chunk));
             }
@@ -116,7 +118,7 @@ impl Read for PyGeneratorRead {
                 return Ok(0);
             };
 
-            if let Ok(chunk_str) = chunk.downcast::<PyString>() {
+            if let Ok(chunk_str) = chunk.cast::<PyString>() {
                 let text = chunk_str.to_str().map_err(|err| pyerr_to_io(&err))?;
                 let bytes = text.as_bytes();
 
@@ -140,9 +142,9 @@ impl Read for PyGeneratorRead {
                 return Ok(out.len());
             }
 
-            let bytes = if let Ok(chunk_bytes) = chunk.downcast::<PyBytes>() {
+            let bytes = if let Ok(chunk_bytes) = chunk.cast::<PyBytes>() {
                 chunk_bytes.as_bytes()
-            } else if let Ok(chunk_bytearray) = chunk.downcast::<PyByteArray>() {
+            } else if let Ok(chunk_bytearray) = chunk.cast::<PyByteArray>() {
                 self.bytearray_buffer = Some(chunk_bytearray.to_vec());
                 if let Some(bytes_ref) = self.bytearray_buffer.as_deref() {
                     bytes_ref

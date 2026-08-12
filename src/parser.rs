@@ -119,7 +119,7 @@ impl XmlParser {
                 return Ok(None);
             }
 
-            let tuple = result.bind(py).downcast::<PyTuple>()?;
+            let tuple = result.bind(py).cast::<PyTuple>()?;
             final_key = tuple.get_item(0)?.extract::<String>()?;
             final_value = tuple.get_item(1)?;
         }
@@ -140,7 +140,7 @@ impl XmlParser {
 
         match item.get_item(final_key.as_str())? {
             Some(existing) => {
-                if let Ok(list) = existing.downcast::<PyList>() {
+                if let Ok(list) = existing.cast::<PyList>() {
                     list.append(final_value)?;
                 } else {
                     let new_list = PyList::new(py, [existing, final_value])?;
@@ -203,7 +203,7 @@ impl XmlParser {
             for attr in attrs {
                 let key = &attr.key;
                 let value_string = attr
-                    .unescape_value()
+                    .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                     .map_err(|e| expat_error(py, e.to_string()))?
                     .into_owned();
 
@@ -312,14 +312,24 @@ impl XmlParser {
             None
         } else {
             let joined = text_parts.join(&self.config.cdata_separator);
-            if self.config.strip_whitespace && joined.trim().is_empty() {
-                None
+            // Trim the fully joined text, not each fragment: fragments are split at
+            // child-element and entity-reference boundaries (quick-xml reports
+            // `&entity;`/`&#NN;` as their own events), so interior whitespace next
+            // to those boundaries must survive -- only the run's outer edges get
+            // stripped, matching xmltodict's `text.strip()` on the joined buffer.
+            if self.config.strip_whitespace {
+                let trimmed = joined.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_owned())
+                }
             } else {
                 Some(joined)
             }
         };
 
-        let element_dict = current_element.downcast_bound::<PyDict>(py)?;
+        let element_dict = current_element.cast_bound::<PyDict>(py)?;
         let has_attrs = !element_dict.is_empty();
 
         let final_value = match (has_attrs, text_content) {
@@ -370,7 +380,7 @@ impl XmlParser {
             let Some(parent) = self.stack.last() else {
                 return Err(expat_error(py, "unexpected closing tag".to_owned()));
             };
-            let parent_dict = parent.downcast_bound::<PyDict>(py)?;
+            let parent_dict = parent.cast_bound::<PyDict>(py)?;
 
             self.push_data(py, parent_dict, &element_name, final_value.bind(py))?;
         }
@@ -392,7 +402,7 @@ impl XmlParser {
         let Some(parent) = self.stack.last() else {
             return Ok(());
         };
-        let parent_dict = parent.downcast_bound::<PyDict>(py)?;
+        let parent_dict = parent.cast_bound::<PyDict>(py)?;
         let comment_py = if self.config.strip_whitespace {
             comment.trim().into_pyobject(py)?
         } else {
