@@ -10,6 +10,9 @@ from typing import Any, Callable, Protocol
 class SupportsRead(Protocol):
     def read(self, size: int = ...) -> bytes: ...
 
+class SupportsWrite(Protocol):
+    def write(self, s: str) -> int: ...
+
 XMLInput = str | bytes | bytearray | SupportsRead | Generator[str | bytes, None, None]
 XMLDict = dict[str, Any]
 PostprocessorFunc = Callable[[list[str], str, Any], tuple[str, Any] | None]
@@ -87,7 +90,7 @@ def parse(
 
 def unparse(
     input_dict: XMLDict,
-    output: str | None = None,
+    output: SupportsWrite | None = None,
     encoding: str = "utf-8",
     full_document: bool = True,
     short_empty_elements: bool = False,
@@ -97,12 +100,12 @@ def unparse(
     newl: str = "\n",
     indent: str = "\t",
     preprocessor: PreprocessorFunc | None = None,
-) -> str:
+) -> str | None:
     r"""Convert Python dictionary back to XML string.
 
     Args:
         input_dict: Dictionary to convert to XML (must have exactly one root key if full_document=True)
-        output: Optional file-like object to write to (for compatibility, returns string anyway)
+        output: Optional file-like object to write to (must have a write() method). When provided, writes the result to this object and returns None
         encoding: Character encoding for XML declaration (default 'utf-8')
         full_document: If True, includes XML declaration (default True)
         short_empty_elements: If True, empty elements use <tag/> format (default False)
@@ -116,7 +119,7 @@ def unparse(
             - Should return (new_key, new_value) tuple or None to skip
 
     Returns:
-        XML string representation of the dictionary
+        XML string representation of the dictionary, or None if output file-like object is provided
 
     Raises:
         ValueError: If full_document=True and dict doesn't have exactly one root element

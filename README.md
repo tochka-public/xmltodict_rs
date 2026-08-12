@@ -103,6 +103,7 @@ Convert a Python dictionary back to XML.
 ```python
 xmltodict_rs.unparse(
     input_dict,                   # dict: Dictionary to convert
+    output=None,                  # file-like: Optional output object to write to
     encoding="utf-8",            # str: Character encoding
     full_document=True,          # bool: Include XML declaration
     short_empty_elements=False,  # bool: Use <tag/> for empty elements

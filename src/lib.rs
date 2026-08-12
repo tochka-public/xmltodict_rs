@@ -303,7 +303,7 @@ fn parse(
 #[pyfunction]
 #[pyo3(signature = (
     input_dict,
-    _output = None,
+    output = None,
     encoding = "utf-8",
     full_document = true,
     short_empty_elements = false,
@@ -317,7 +317,7 @@ fn parse(
 fn unparse(
     py: Python,
     input_dict: &Bound<'_, PyDict>,
-    _output: Option<&Bound<'_, PyAny>>,
+    output: Option<&Bound<'_, PyAny>>,
     encoding: &str,
     full_document: bool,
     short_empty_elements: bool,
@@ -366,6 +366,12 @@ fn unparse(
     }
 
     let result = writer.finish();
+
+    if let Some(out) = output {
+        out.call_method1("write", (result,))?;
+        return Ok(py.None());
+    }
+
     Ok(result.into_pyobject(py)?.into_any().unbind())
 }
 

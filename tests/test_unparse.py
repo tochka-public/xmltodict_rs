@@ -419,3 +419,14 @@ def test_attr_control_chars_escaped():
 def test_attr_control_chars_roundtrip():
     d = {"root": {"@a": "line1\nline2"}}
     assert xmltodict_rs.parse(xmltodict_rs.unparse(d)) == d
+
+
+def test_unparse_output_file_like():
+    import io
+
+    d = {"a": "1"}
+    ref_buf, rs_buf = io.StringIO(), io.StringIO()
+    ref_ret = xmltodict.unparse(d, output=ref_buf)
+    rs_ret = xmltodict_rs.unparse(d, output=rs_buf)
+    assert rs_ret is None and ref_ret is None
+    assert rs_buf.getvalue() == ref_buf.getvalue()
