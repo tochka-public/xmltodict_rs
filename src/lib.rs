@@ -85,10 +85,14 @@ fn parse_xml_with_reader<R: BufRead>(
         .expand_empty_elements(true);
 
     let mut buf = Vec::with_capacity(128);
+    let mut root_closed = false;
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
+                if root_closed {
+                    return Err(expat_error(py, "junk after document element".to_owned()));
+                }
                 let name = std::str::from_utf8(e.name().into_inner())?;
                 validate_element_name(py, name)?;
                 let attrs: Vec<_> = e
@@ -101,8 +105,14 @@ fn parse_xml_with_reader<R: BufRead>(
                 let name = std::str::from_utf8(e.name().into_inner())?;
                 validate_element_name(py, name)?;
                 parser.end_element(py, name)?;
+                if parser.path.is_empty() {
+                    root_closed = true;
+                }
             }
             Ok(Event::Empty(ref e)) => {
+                if root_closed {
+                    return Err(expat_error(py, "junk after document element".to_owned()));
+                }
                 let name = std::str::from_utf8(e.name().into_inner())?;
                 validate_element_name(py, name)?;
 
@@ -112,12 +122,26 @@ fn parse_xml_with_reader<R: BufRead>(
                     .map_err(|e| expat_error(py, e.to_string()))?;
                 parser.start_element(py, name, &attrs)?;
                 parser.end_element(py, name)?;
+                if parser.path.is_empty() {
+                    root_closed = true;
+                }
             }
             Ok(Event::Text(ref e)) => {
                 let text = e.unescape().map_err(|e| expat_error(py, e.to_string()))?;
+                if parser.path.is_empty() && !text.trim().is_empty() {
+                    let msg = if root_closed {
+                        "junk after document element"
+                    } else {
+                        "syntax error"
+                    };
+                    return Err(expat_error(py, msg.to_owned()));
+                }
                 parser.characters(&text);
             }
             Ok(Event::CData(ref e)) => {
+                if parser.path.is_empty() {
+                    return Err(expat_error(py, "junk after document element".to_owned()));
+                }
                 parser.characters(std::str::from_utf8(e.as_ref())?);
             }
             Ok(Event::Comment(ref e)) if process_comments => {

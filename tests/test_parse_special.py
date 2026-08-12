@@ -1,3 +1,5 @@
+from xml.parsers.expat import ExpatError
+
 import pytest
 import xmltodict
 
@@ -210,3 +212,31 @@ def test_multiple_processing_instructions():
     <root>content</root>"""
     result = xmltodict_rs.parse(xml)
     assert result == {"root": "content"}
+
+
+# Junk outside root tests
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        "<a>1</a>junk",
+        "<a/><b/>",
+        "<a/>text",
+        "junk<a/>",
+    ],
+)
+def test_junk_outside_root_raises(xml):
+    with pytest.raises(ExpatError):
+        xmltodict.parse(xml)
+    with pytest.raises(ExpatError):
+        xmltodict_rs.parse(xml)
+
+
+@pytest.mark.parametrize("xml", ["<a/>\n", "  <a/>  ", "<a>1</a>\t\n"])
+def test_whitespace_outside_root_is_legal(xml):
+    assert xmltodict_rs.parse(xml) == xmltodict.parse(xml)
+    # and with whitespace stripping disabled
+    assert xmltodict_rs.parse(xml, strip_whitespace=False) == xmltodict.parse(
+        xml, strip_whitespace=False
+    )
