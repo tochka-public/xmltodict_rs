@@ -113,29 +113,27 @@ impl XmlParser {
     }
 
     #[inline]
-    fn apply_postprocessor<'py>(
+    fn apply_postprocessor<'a, 'py>(
         &self,
         py: Python<'py>,
-        key: &str,
+        key: &'a str,
         data: &Bound<'py, PyAny>,
-    ) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
-        let mut final_key = key.to_owned();
-        let mut final_value = data.clone();
+    ) -> PyResult<Option<(std::borrow::Cow<'a, str>, Bound<'py, PyAny>)>> {
+        let Some(proc) = &self.postprocessor else {
+            return Ok(Some((std::borrow::Cow::Borrowed(key), data.clone())));
+        };
 
-        if let Some(proc) = &self.postprocessor {
-            let path_list = PyList::new(py, &self.path)?;
-            let result = proc.call1(py, (path_list, key, data))?;
+        let path_list = PyList::new(py, &self.path)?;
+        let result = proc.call1(py, (path_list, key, data))?;
 
-            if result.is_none(py) {
-                return Ok(None);
-            }
-
-            let tuple = result.bind(py).cast::<PyTuple>()?;
-            final_key = tuple.get_item(0)?.extract::<String>()?;
-            final_value = tuple.get_item(1)?;
+        if result.is_none(py) {
+            return Ok(None);
         }
 
-        Ok(Some((final_key, final_value)))
+        let tuple = result.bind(py).cast::<PyTuple>()?;
+        let final_key = tuple.get_item(0)?.extract::<String>()?;
+        let final_value = tuple.get_item(1)?;
+        Ok(Some((std::borrow::Cow::Owned(final_key), final_value)))
     }
 
     fn push_data(
@@ -149,21 +147,21 @@ impl XmlParser {
             return Ok(());
         };
 
-        match item.get_item(final_key.as_str())? {
+        match item.get_item(final_key.as_ref())? {
             Some(existing) => {
                 if let Ok(list) = existing.cast::<PyList>() {
                     list.append(final_value)?;
                 } else {
                     let new_list = PyList::new(py, [existing, final_value])?;
-                    item.set_item(final_key, &new_list)?;
+                    item.set_item(final_key.as_ref(), &new_list)?;
                 }
             }
             None => {
-                if self.should_force_list(py, final_key.as_str(), final_value.as_ref())? {
+                if self.should_force_list(py, final_key.as_ref(), final_value.as_ref())? {
                     let new_list = PyList::new(py, [final_value])?;
-                    item.set_item(final_key, &new_list)?;
+                    item.set_item(final_key.as_ref(), &new_list)?;
                 } else {
-                    item.set_item(final_key, final_value)?;
+                    item.set_item(final_key.as_ref(), final_value)?;
                 }
             }
         }
@@ -289,7 +287,7 @@ impl XmlParser {
                 else {
                     continue;
                 };
-                element_dict.set_item(final_key, final_value)?;
+                element_dict.set_item(final_key.as_ref(), final_value)?;
             }
         }
 
@@ -365,7 +363,7 @@ impl XmlParser {
                         &self.config.cdata_key,
                         text.into_py_any(py)?.bind(py),
                     )? {
-                        dict.set_item(final_key, final_value)?;
+                        dict.set_item(final_key.as_ref(), final_value)?;
                     }
                     dict.into()
                 } else {
@@ -378,7 +376,7 @@ impl XmlParser {
                     &self.config.cdata_key,
                     text.into_py_any(py)?.bind(py),
                 )? {
-                    element_dict.set_item(final_key, final_value)?;
+                    element_dict.set_item(final_key.as_ref(), final_value)?;
                 }
                 current_element
             }
@@ -392,11 +390,11 @@ impl XmlParser {
             else {
                 return Ok(());
             };
-            if self.should_force_list(py, final_key.as_str(), final_value.as_ref())? {
+            if self.should_force_list(py, final_key.as_ref(), final_value.as_ref())? {
                 let new_list = PyList::new(py, [final_value.clone()])?;
-                result_dict.set_item(final_key, &new_list)?;
+                result_dict.set_item(final_key.as_ref(), &new_list)?;
             } else {
-                result_dict.set_item(final_key, final_value)?;
+                result_dict.set_item(final_key.as_ref(), final_value)?;
             }
             self.stack.push(result_dict.into());
         } else {
