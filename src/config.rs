@@ -167,7 +167,6 @@ impl fmt::Display for NamespaceSeparator {
 }
 
 /// Configuration for XML parsing.
-/// Some fields are kept for API compatibility with xmltodict but not used in current implementation.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
 pub struct ParseConfig {
@@ -179,13 +178,7 @@ pub struct ParseConfig {
     pub strip_whitespace: bool,
     pub namespace_separator: NamespaceSeparator,
     pub process_namespaces: bool,
-    #[allow(dead_code)]
-    pub process_comments: bool,
     pub comment_key: CommentKey,
-    #[allow(dead_code)]
-    pub item_depth: usize,
-    #[allow(dead_code)]
-    pub disable_entities: bool,
     pub namespaces: Option<HashMap<String, String>>,
 }
 
@@ -200,10 +193,7 @@ impl Default for ParseConfig {
             strip_whitespace: true,
             namespace_separator: NamespaceSeparator::default(),
             process_namespaces: false,
-            process_comments: false,
             comment_key: CommentKey::default(),
-            item_depth: 0,
-            disable_entities: true,
             namespaces: None,
         }
     }
@@ -283,31 +273,10 @@ impl ParseConfigBuilder {
         self
     }
 
-    /// Set whether to process XML comments.
-    #[must_use]
-    pub fn process_comments(mut self, value: bool) -> Self {
-        self.config.process_comments = value;
-        self
-    }
-
     /// Set the key for comment content (default: "#comment").
     #[must_use]
     pub fn comment_key(mut self, value: impl Into<String>) -> Self {
         self.config.comment_key = CommentKey::new(value);
-        self
-    }
-
-    /// Set the item depth for streaming parsing.
-    #[must_use]
-    pub fn item_depth(mut self, value: usize) -> Self {
-        self.config.item_depth = value;
-        self
-    }
-
-    /// Set whether to disable entity expansion.
-    #[must_use]
-    pub fn disable_entities(mut self, value: bool) -> Self {
-        self.config.disable_entities = value;
         self
     }
 

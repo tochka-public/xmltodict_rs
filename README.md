@@ -78,9 +78,10 @@ Convert XML to a Python dictionary.
 ```python
 xmltodict_rs.parse(
     xml_input,                    # str or bytes: XML data to parse
+    encoding=None,                # str: Only UTF-8 is supported; anything else raises NotImplementedError
     process_namespaces=False,     # bool: Process namespace prefixes
     namespace_separator=":",      # str: Separator for namespace and tag
-    disable_entities=True,        # bool: Disable XML entities for security
+    disable_entities=True,        # bool: Disable XML entities for security; False raises NotImplementedError
     process_comments=False,       # bool: Include XML comments in output
     xml_attribs=True,            # bool: Include attributes in output
     attr_prefix="@",             # str: Prefix for attribute keys
@@ -90,7 +91,8 @@ xmltodict_rs.parse(
     strip_whitespace=True,       # bool: Remove whitespace-only text
     force_list=None,             # Control list creation
     postprocessor=None,          # Callback for transforming data
-    item_depth=0,                # Internal depth tracking
+    item_depth=0,                # Streaming mode not implemented; >0 raises NotImplementedError
+    item_callback=None,          # Streaming mode not implemented; non-None raises NotImplementedError
     comment_key="#comment",      # str: Key name for comments
     namespaces=None              # dict: Namespace URI mapping
 )

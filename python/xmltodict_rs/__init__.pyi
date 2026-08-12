@@ -34,6 +34,7 @@ def parse(
     force_list: bool | Collection[str] | Callable[[list[str], str, Any], bool] | None = None,
     postprocessor: PostprocessorFunc | None = None,
     item_depth: int = 0,
+    item_callback: Callable[[list[str], Any], bool] | None = None,
     comment_key: str = "#comment",
     namespaces: dict[str, str] | None = None,
 ) -> XMLDict:
@@ -41,10 +42,12 @@ def parse(
 
     Args:
         xml_input: XML data as string or bytes to parse
-        encoding: Character encoding (for compatibility, not used in Rust implementation)
+        encoding: Character encoding of xml_input. Only UTF-8 (the default) is
+            supported; any other value raises NotImplementedError
         process_namespaces: If True, namespace prefixes are processed and expanded
         namespace_separator: Separator character between namespace and tag name (default ':')
-        disable_entities: If True, XML entities are disabled for security (default True)
+        disable_entities: If True, XML entities are disabled for security (default True).
+            Setting this to False is not implemented and raises NotImplementedError
         process_comments: If True, XML comments are included in output with comment_key
         xml_attribs: If True, XML attributes are included in output (default True)
         attr_prefix: Prefix for attribute keys in output dict (default '@')
@@ -60,7 +63,10 @@ def parse(
         postprocessor: Optional callback to transform parsed data:
             - Called with (path, key, value)
             - Should return (new_key, new_value) tuple or None to skip
-        item_depth: Internal parameter for tracking parsing depth
+        item_depth: Streaming mode is not implemented; any value greater than 0
+            raises NotImplementedError
+        item_callback: Streaming mode is not implemented; passing a callback
+            raises NotImplementedError
         comment_key: Key name for XML comments in output (default '#comment')
         namespaces: Optional dict mapping namespace URIs to prefixes
 
@@ -70,6 +76,8 @@ def parse(
     Raises:
         ValueError: If XML is malformed or has parsing errors
         TypeError: If xml_input is not str or bytes
+        NotImplementedError: If item_depth/item_callback (streaming),
+            disable_entities=False, or a non-UTF-8 encoding is requested
 
     Examples:
         >>> parse('<root><item>value</item></root>')

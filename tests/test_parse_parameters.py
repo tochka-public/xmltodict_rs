@@ -226,3 +226,25 @@ def test_all_custom_parameters():
         strip_whitespace=True,
         force_cdata=True,
     )
+
+
+def test_streaming_mode_not_implemented():
+    with pytest.raises(NotImplementedError):
+        xmltodict_rs.parse("<a><b>1</b></a>", item_depth=2, item_callback=lambda p, i: True)
+    with pytest.raises(NotImplementedError):
+        xmltodict_rs.parse("<a/>", item_depth=1)
+
+
+def test_enabled_entities_not_implemented():
+    with pytest.raises(NotImplementedError):
+        xmltodict_rs.parse("<a/>", disable_entities=False)
+
+
+def test_non_utf8_encoding_not_implemented():
+    with pytest.raises(NotImplementedError):
+        xmltodict_rs.parse("<a/>".encode("latin-1"), encoding="latin-1")
+
+
+def test_utf8_encoding_accepted():
+    for enc in (None, "utf-8", "UTF-8", "utf8"):
+        assert xmltodict_rs.parse("<a>x</a>", encoding=enc) == {"a": "x"}

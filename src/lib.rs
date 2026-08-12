@@ -176,7 +176,7 @@ fn parse_xml_with_reader<R: BufRead>(
 #[pyfunction]
 #[pyo3(signature = (
     xml_input,
-    _encoding = None,
+    encoding = None,
     process_namespaces = false,
     namespace_separator = ":",
     disable_entities = true,
@@ -190,13 +190,14 @@ fn parse_xml_with_reader<R: BufRead>(
     force_list = None,
     postprocessor = None,
     item_depth = 0,
+    item_callback = None,
     comment_key = "#comment",
     namespaces = None,
 ))]
 fn parse(
     py: Python,
     xml_input: &Bound<'_, PyAny>,
-    _encoding: Option<&str>,
+    encoding: Option<&str>,
     process_namespaces: bool,
     namespace_separator: &str,
     disable_entities: bool,
@@ -210,9 +211,28 @@ fn parse(
     force_list: Option<Py<PyAny>>,
     postprocessor: Option<Py<PyAny>>,
     item_depth: usize,
+    item_callback: Option<&Bound<'_, PyAny>>,
     comment_key: &str,
     namespaces: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
+    if item_depth > 0 || item_callback.is_some() {
+        return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
+            "streaming mode (item_depth/item_callback) is not implemented in xmltodict_rs",
+        ));
+    }
+    if !disable_entities {
+        return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
+            "disable_entities=False (DTD entity expansion) is not implemented in xmltodict_rs",
+        ));
+    }
+    if let Some(enc) = encoding {
+        if !enc.eq_ignore_ascii_case("utf-8") && !enc.eq_ignore_ascii_case("utf8") {
+            return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
+                format!("encoding '{enc}' is not supported, only UTF-8"),
+            ));
+        }
+    }
+
     let namespaces_rs = namespaces
         .map(|dict_py| extract_hashmap(py, &dict_py))
         .transpose()?;
@@ -226,10 +246,7 @@ fn parse(
         strip_whitespace,
         namespace_separator: NamespaceSeparator::new(namespace_separator),
         process_namespaces,
-        process_comments,
         comment_key: CommentKey::new(comment_key),
-        item_depth,
-        disable_entities,
         namespaces: namespaces_rs,
     };
 
