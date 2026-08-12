@@ -430,3 +430,16 @@ def test_unparse_output_file_like():
     rs_ret = xmltodict_rs.unparse(d, output=rs_buf)
     assert rs_ret is None and ref_ret is None
     assert rs_buf.getvalue() == ref_buf.getvalue()
+
+
+def test_deeply_nested_unparse_does_not_crash():
+    depth = 100_000
+    root = {}
+    cur = root
+    for _ in range(depth):
+        nxt = {}
+        cur["n"] = nxt
+        cur = nxt
+    cur["n"] = "x"
+    result = xmltodict_rs.unparse({"root": root})
+    assert result.count("<n>") == depth + 1

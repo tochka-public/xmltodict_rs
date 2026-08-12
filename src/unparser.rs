@@ -96,6 +96,21 @@ impl XmlWriter {
         value: &Bound<'_, PyAny>,
         needs_newline: bool,
     ) -> PyResult<()> {
+        // Grow the stack in heap-allocated segments: deeply nested input dicts
+        // must not overflow the OS thread stack (that would kill the whole
+        // Python process with SIGSEGV).
+        stacker::maybe_grow(64 * 1024, 1024 * 1024, || {
+            self.write_element_inner(py, tag, value, needs_newline)
+        })
+    }
+
+    fn write_element_inner(
+        &mut self,
+        py: Python,
+        tag: &str,
+        value: &Bound<'_, PyAny>,
+        needs_newline: bool,
+    ) -> PyResult<()> {
         let Some((final_tag, final_value)) = self.apply_preprocessor(py, tag, value)? else {
             return Ok(());
         };
