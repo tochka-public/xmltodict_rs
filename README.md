@@ -147,6 +147,25 @@ implemented in `xmltodict_rs`. Calling `parse()` with them raises
 - **Non-UTF-8 `encoding`** in `parse()` — only UTF-8 input is supported;
   passing any other `encoding` value raises `NotImplementedError`.
 
+### Minor behavioral deviations
+
+Found by differential audit against `xmltodict==0.13.0`; corner cases, not
+`NotImplementedError`-gated, tracked for future alignment:
+
+- `parse(strip_whitespace=False)` on an empty `<![CDATA[]]>` section returns
+  `''`; upstream returns `None`.
+- A `postprocessor` that returns `None` for the root element raises
+  `ExpatError` ("no element found"); upstream returns `None`.
+- `parse(process_namespaces=True, namespaces=...)` suppresses the `@xmlns`
+  attribute on an element when every declared URI is covered by the
+  `namespaces` mapping; upstream always emits `@xmlns` (with the raw,
+  unmapped prefix -> URI pairs) whenever the element has other attributes
+  and namespace declarations.
+- `unparse(pretty=True)` whitespace layout can differ from upstream in
+  mixed-content elements that combine `#text` with list-valued children
+  (indentation/newline placement around the list, not the element content
+  itself).
+
 ## Development
 
 ### Setup
