@@ -80,7 +80,7 @@ match the same-numbered reference version. Public OSS
   `process_namespaces` is on); desync → "unclosed element(s)" at the end of
   `parse_xml_with_reader`.
 - **`gil_used = false`**: the module is declared safe for free-threaded
-  CPython (3.13t/3.14t) — no global mutable state without synchronization;
+  CPython (3.14t) — no global mutable state without synchronization;
   parser state is per-call only.
 - **mimalloc** — global allocator only on linux-x86_64 / windows-x86_64 /
   macos (feature `mimalloc`, default on).
@@ -110,7 +110,9 @@ match the same-numbered reference version. Public OSS
 - `just test` — pytest + `cargo test`; `just check` — fmt + clippy (gate).
 - `just bench` — rebuild + `benches/accurate_benchmark.py`.
 - CI: `.github/workflows/CI.yml` — matrix of platforms and CPython versions,
-  including free-threaded 3.13t/3.14t; PyPy is not supported.
+  including free-threaded 3.14t; 3.13t wheels were dropped with the pyo3
+  0.29 upgrade (free-threading is supported on 3.14+ only); PyPy is not
+  supported.
 
 ## Commits
 
