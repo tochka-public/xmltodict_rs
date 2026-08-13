@@ -74,13 +74,15 @@ jobs:
     needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
           - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
           - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", no_default_features: true }
           - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", no_default_features: true }
-          - { runner: ubuntu-22.04, target: s390x, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", no_default_features: true }
+          # s390x uses manylinux_2_28: psm (stacker dependency) assembly needs newer binutils than the manylinux2014 cross toolchain
+          - { runner: ubuntu-22.04, target: s390x, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", no_default_features: true, manylinux: manylinux_2_28 }
           - { runner: ubuntu-22.04, target: ppc64le, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", no_default_features: true }
     steps:
       - uses: actions/checkout@v4
@@ -93,7 +95,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --interpreter ${{ matrix.platform.interpreter }} ${{ matrix.platform.no_default_features && '--no-default-features' || '' }}
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          manylinux: auto
+          manylinux: ${{ matrix.platform.manylinux || 'auto' }}
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
