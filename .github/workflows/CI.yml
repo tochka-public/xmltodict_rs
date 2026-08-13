@@ -32,11 +32,22 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y python3-dev
-      # toolchain input intentionally omitted: dtolnay/rust-toolchain reads
-      # the pinned version from rust-toolchain.toml so there is a single
-      # source of truth for the MSRV.
+      # Single source of truth for the toolchain is rust-toolchain.toml.
+      # dtolnay/rust-toolchain does NOT read that file and requires an
+      # explicit input, so extract the channel and pass it through.
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          if [[ -z "$channel" ]]; then
+            echo "failed to read channel from rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: cargo fmt
@@ -221,10 +232,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: 3.12
-      # toolchain input intentionally omitted: reads the pinned version from
-      # rust-toolchain.toml (see checks job above).
+      # Single source of truth for the toolchain is rust-toolchain.toml —
+      # extracted explicitly because dtolnay/rust-toolchain does not read it
+      # (see checks job above).
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          if [[ -z "$channel" ]]; then
+            echo "failed to read channel from rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           targets: ${{ matrix.platform.rust_target }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
