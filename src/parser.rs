@@ -58,13 +58,14 @@ pub struct XmlParser {
     pub namespace_stack: Vec<HashMap<String, String>>,
     /// Parallel to `text_stack`: for the current element, `true` once a
     /// coalescible fragment (`Text`/`GeneralRef`) has been pushed onto
-    /// `text_stack` without an intervening structural break (child element or
-    /// CDATA section). While `true`, the next coalescible fragment is appended
-    /// to the last string instead of starting a new one. This mirrors expat's
-    /// `buffer_text=True` mode (which `xmltodict` relies on): entity references
-    /// resolved inline with surrounding text must not introduce a
-    /// `cdata_separator` between them, but text separated by a child element or
-    /// a CDATA section is a genuine, separately-buffered fragment and keeps it.
+    /// `text_stack` without an intervening structural break (child element,
+    /// CDATA section, comment, or processing instruction). While `true`, the
+    /// next coalescible fragment is appended to the last string instead of
+    /// starting a new one. This mirrors expat's `buffer_text=True` mode
+    /// (which `xmltodict` relies on): entity references resolved inline with
+    /// surrounding text must not introduce a `cdata_separator` between them,
+    /// but text separated by a child element, a CDATA section, a comment, or
+    /// a PI is a genuine, separately-buffered fragment and keeps it.
     text_run_open: Vec<bool>,
 }
 
@@ -307,9 +308,7 @@ impl XmlParser {
         // before and after it must land in separate fragments (and therefore get
         // `cdata_separator` between them), even though within each side entity
         // references still coalesce with their neighboring text.
-        if let Some(parent_run_open) = self.text_run_open.last_mut() {
-            *parent_run_open = false;
-        }
+        self.break_text_run();
 
         self.stack.push(element_dict.into());
         self.path.push(element_name);
@@ -441,7 +440,21 @@ impl XmlParser {
         }
     }
 
-    pub fn comment(&self, py: Python, comment: &str) -> PyResult<()> {
+    /// Close the current element's text run: the next coalescible fragment
+    /// starts a new entry in `text_stack` (and so picks up a
+    /// `cdata_separator` from whatever preceded it), instead of appending to
+    /// the previous one. expat's `buffer_text=True` mode flushes the text
+    /// buffer on any markup -- child elements, CDATA sections, comments, and
+    /// processing instructions all qualify. No-op outside an open element
+    /// (empty `text_run_open`, i.e. at the document top level).
+    pub fn break_text_run(&mut self) {
+        if let Some(run_open) = self.text_run_open.last_mut() {
+            *run_open = false;
+        }
+    }
+
+    pub fn comment(&mut self, py: Python, comment: &str) -> PyResult<()> {
+        self.break_text_run();
         let Some(parent) = self.stack.last() else {
             return Ok(());
         };

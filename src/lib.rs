@@ -93,6 +93,40 @@ fn extract_hashmap(py: Python, dict_input: &Py<PyAny>) -> PyResult<HashMap<Strin
     Ok(hashmap)
 }
 
+/// The "junk after document element" `ExpatError`, raised whenever markup or
+/// non-whitespace text is seen after the root element has closed.
+fn junk_after_root_error(py: Python) -> PyErr {
+    expat_error(py, "junk after document element".to_owned())
+}
+
+/// Text (or a resolved entity reference) seen while `path` is empty: before
+/// the root it is a syntax error, after the root it is trailing junk.
+fn text_outside_root_error(py: Python, root_closed: bool) -> PyErr {
+    let msg = if root_closed {
+        "junk after document element"
+    } else {
+        "syntax error"
+    };
+    expat_error(py, msg.to_owned())
+}
+
+/// Shared `Start`/`Empty` handling: validate the tag name and feed its
+/// attributes to the parser. Callers are responsible for the `root_closed`
+/// guard and (for `Empty`) the matching `end_element` call.
+fn parse_start_tag(
+    py: Python,
+    parser: &mut XmlParser,
+    e: &quick_xml::events::BytesStart,
+) -> PyResult<()> {
+    let name = utf8_str(e.name().into_inner())?;
+    validate_element_name(py, name)?;
+    let attrs: Vec<_> = e
+        .attributes()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| expat_error(py, e.to_string()))?;
+    parser.start_element(py, name, &attrs)
+}
+
 fn parse_xml_with_reader<R: BufRead>(
     py: Python,
     reader: R,
@@ -121,15 +155,9 @@ fn parse_xml_with_reader<R: BufRead>(
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 if root_closed {
-                    return Err(expat_error(py, "junk after document element".to_owned()));
+                    return Err(junk_after_root_error(py));
                 }
-                let name = utf8_str(e.name().into_inner())?;
-                validate_element_name(py, name)?;
-                let attrs: Vec<_> = e
-                    .attributes()
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| expat_error(py, e.to_string()))?;
-                parser.start_element(py, name, &attrs)?;
+                parse_start_tag(py, &mut parser, e)?;
             }
             Ok(Event::End(ref e)) => {
                 let name = utf8_str(e.name().into_inner())?;
@@ -141,16 +169,9 @@ fn parse_xml_with_reader<R: BufRead>(
             }
             Ok(Event::Empty(ref e)) => {
                 if root_closed {
-                    return Err(expat_error(py, "junk after document element".to_owned()));
+                    return Err(junk_after_root_error(py));
                 }
-                let name = utf8_str(e.name().into_inner())?;
-                validate_element_name(py, name)?;
-
-                let attrs: Vec<_> = e
-                    .attributes()
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| expat_error(py, e.to_string()))?;
-                parser.start_element(py, name, &attrs)?;
+                parse_start_tag(py, &mut parser, e)?;
                 parser.end_element(py)?;
                 if parser.path.is_empty() {
                     root_closed = true;
@@ -159,41 +180,53 @@ fn parse_xml_with_reader<R: BufRead>(
             Ok(Event::Text(ref e)) => {
                 let text = e.decode().map_err(|e| expat_error(py, e.to_string()))?;
                 if parser.path.is_empty() && !text.trim().is_empty() {
-                    let msg = if root_closed {
-                        "junk after document element"
-                    } else {
-                        "syntax error"
-                    };
-                    return Err(expat_error(py, msg.to_owned()));
+                    return Err(text_outside_root_error(py, root_closed));
                 }
                 parser.characters(&text, true);
             }
             Ok(Event::GeneralRef(ref e)) => {
                 if parser.path.is_empty() {
-                    let msg = if root_closed {
-                        "junk after document element"
-                    } else {
-                        "syntax error"
-                    };
-                    return Err(expat_error(py, msg.to_owned()));
+                    return Err(text_outside_root_error(py, root_closed));
                 }
                 let resolved = resolve_general_ref(py, e)?;
                 parser.characters(&resolved, true);
             }
             Ok(Event::CData(ref e)) => {
                 if parser.path.is_empty() {
-                    return Err(expat_error(py, "junk after document element".to_owned()));
+                    return Err(junk_after_root_error(py));
                 }
                 parser.characters(utf8_str(e.as_ref())?, false);
             }
-            Ok(Event::Comment(ref e)) if process_comments => {
-                parser.comment(py, utf8_str(e.as_ref())?)?;
+            Ok(Event::Comment(ref e)) => {
+                // Comments are markup: they close the current element's text
+                // run regardless of `process_comments` (matches expat's
+                // `buffer_text=True` flush-on-any-markup semantics), and are
+                // only ever collected into the tree when requested.
+                if process_comments {
+                    parser.comment(py, utf8_str(e.as_ref())?)?;
+                } else {
+                    parser.break_text_run();
+                }
+            }
+            Ok(Event::PI(_)) => {
+                // Processing instructions are markup too: same text-run break
+                // as comments. `xmltodict` never surfaces PI content, and a
+                // PI is legal Misc content both before and after the root
+                // element, so no `root_closed` check here.
+                parser.break_text_run();
+            }
+            // DOCTYPE and XML declarations are only legal before the root
+            // element; a PI in the same position is legal Misc content and
+            // is handled separately above (no `root_closed` check).
+            Ok(Event::DocType(_) | Event::Decl(_)) => {
+                if root_closed {
+                    return Err(junk_after_root_error(py));
+                }
             }
             Ok(Event::Eof) => {
                 break;
             }
             Err(e) => return Err(map_quick_xml_error(py, e)),
-            _ => {}
         }
         buf.clear();
     }

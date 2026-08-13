@@ -115,6 +115,27 @@ def test_ignore_comments(xml):
     compare_parsers(xml, process_comments=False)
 
 
+# Comments/PIs must break the current element's text run (regression: a
+# comment or PI used to silently re-coalesce the text on either side of it,
+# dropping the `cdata_separator` that should land between the two halves).
+
+
+def test_comment_breaks_text_run():
+    compare_parsers("<a>x<!--c-->y</a>", cdata_separator="|")
+
+
+def test_comment_breaks_text_run_with_process_comments():
+    compare_parsers("<a>x<!--c-->y</a>", cdata_separator="|", process_comments=True)
+
+
+def test_pi_breaks_text_run():
+    compare_parsers("<a>x<?pi?>y</a>", cdata_separator="|")
+
+
+def test_comment_then_entity_does_not_recoalesce():
+    compare_parsers("<a>x<!--c-->&amp;y</a>", cdata_separator="|")
+
+
 # XML declaration tests
 
 
@@ -224,6 +245,8 @@ def test_multiple_processing_instructions():
         "<a/><b/>",
         "<a/>text",
         "junk<a/>",
+        "<a/><!DOCTYPE b>",
+        '<a/><?xml version="1.0"?>',
     ],
 )
 def test_junk_outside_root_raises(xml):
@@ -231,6 +254,12 @@ def test_junk_outside_root_raises(xml):
         xmltodict.parse(xml)
     with pytest.raises(ExpatError):
         xmltodict_rs.parse(xml)
+
+
+def test_pi_after_root_is_legal():
+    # Unlike DOCTYPE/decl, a processing instruction after the root is legal
+    # Misc content and must not be rejected as junk.
+    compare_parsers("<a/><?pi?>")
 
 
 @pytest.mark.parametrize("xml", ["<a/>\n", "  <a/>  ", "<a>1</a>\t\n"])
