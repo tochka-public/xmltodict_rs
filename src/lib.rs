@@ -47,11 +47,9 @@ fn utf8_str(bytes: &[u8]) -> PyResult<&str> {
         .map_err(|e| pyo3::exceptions::PyUnicodeDecodeError::new_err(e.to_string()))
 }
 
-/// Resolve a `&entity;` / `&#NN;` general reference (quick-xml 0.41 reports
-/// these as standalone events instead of embedding them in `Event::Text`).
-/// Only character references and the five predefined XML entities are
-/// resolved -- DTD-declared custom entities stay unsupported, matching
-/// `disable_entities=False` being unimplemented.
+/// Resolve a `&entity;`/`&#NN;` reference (a standalone event in quick-xml
+/// 0.41). Char refs and the five predefined entities only -- DTD-declared
+/// entities stay unsupported (`disable_entities=False` is unimplemented).
 fn resolve_general_ref(py: Python, r: &quick_xml::events::BytesRef) -> PyResult<String> {
     if let Some(ch) = r
         .resolve_char_ref()

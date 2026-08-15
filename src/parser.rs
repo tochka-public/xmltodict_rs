@@ -56,16 +56,11 @@ pub struct XmlParser {
     pub path: Vec<String>,
     pub text_stack: Vec<Vec<String>>,
     pub namespace_stack: Vec<HashMap<String, String>>,
-    /// Parallel to `text_stack`: for the current element, `true` once a
-    /// coalescible fragment (`Text`/`GeneralRef`) has been pushed onto
-    /// `text_stack` without an intervening structural break (child element,
-    /// CDATA section, comment, or processing instruction). While `true`, the
-    /// next coalescible fragment is appended to the last string instead of
-    /// starting a new one. This mirrors expat's `buffer_text=True` mode
-    /// (which `xmltodict` relies on): entity references resolved inline with
-    /// surrounding text must not introduce a `cdata_separator` between them,
-    /// but text separated by a child element, a CDATA section, a comment, or
-    /// a PI is a genuine, separately-buffered fragment and keeps it.
+    /// Parallel to `text_stack`: `true` while the current element has an
+    /// open "text run" -- the next `Text`/`GeneralRef` fragment is appended
+    /// to the last string instead of starting a new one (no `cdata_separator`
+    /// in between). Mirrors expat's `buffer_text=True`: child elements,
+    /// CDATA, comments and PIs flush the buffer and break the run.
     text_run_open: Vec<bool>,
 }
 
