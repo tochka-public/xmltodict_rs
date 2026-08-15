@@ -108,6 +108,33 @@ fn text_outside_root_error(py: Python, root_closed: bool) -> PyErr {
     expat_error(py, msg.to_owned())
 }
 
+/// A DOCTYPE is only legal in the prolog: before the root element opens.
+fn validate_doctype_placement(py: Python, in_root: bool, root_closed: bool) -> PyResult<()> {
+    if root_closed {
+        return Err(junk_after_root_error(py));
+    }
+    if in_root {
+        return Err(expat_error(
+            py,
+            "not well-formed (invalid token)".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// The XML declaration is only legal as the document's very first token
+/// (expat: "XML or text declaration not at start of entity" -- even leading
+/// whitespace before it is an error).
+fn validate_decl_placement(py: Python, at_document_start: bool) -> PyResult<()> {
+    if at_document_start {
+        return Ok(());
+    }
+    Err(expat_error(
+        py,
+        "XML or text declaration not at start of entity".to_owned(),
+    ))
+}
+
 /// Shared `Start`/`Empty` handling: validate the tag name and feed its
 /// attributes to the parser. Callers are responsible for the `root_closed`
 /// guard and (for `Empty`) the matching `end_element` call.
@@ -148,6 +175,9 @@ fn parse_xml_with_reader<R: BufRead>(
 
     let mut buf = Vec::with_capacity(128);
     let mut root_closed = false;
+    // expat allows the XML declaration only as the very first thing in the
+    // document -- even leading whitespace before it is an error.
+    let mut at_document_start = true;
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
@@ -213,19 +243,18 @@ fn parse_xml_with_reader<R: BufRead>(
                 // element, so no `root_closed` check here.
                 parser.break_text_run();
             }
-            // DOCTYPE and XML declarations are only legal before the root
-            // element; a PI in the same position is legal Misc content and
-            // is handled separately above (no `root_closed` check).
-            Ok(Event::DocType(_) | Event::Decl(_)) => {
-                if root_closed {
-                    return Err(junk_after_root_error(py));
-                }
+            // A PI in the same positions is legal Misc content and is
+            // handled separately above (no placement check).
+            Ok(Event::DocType(_)) => {
+                validate_doctype_placement(py, !parser.path.is_empty(), root_closed)?;
             }
+            Ok(Event::Decl(_)) => validate_decl_placement(py, at_document_start)?,
             Ok(Event::Eof) => {
                 break;
             }
             Err(e) => return Err(map_quick_xml_error(py, e)),
         }
+        at_document_start = false;
         buf.clear();
     }
 

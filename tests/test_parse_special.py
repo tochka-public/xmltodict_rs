@@ -278,3 +278,23 @@ def test_deeply_nested_parse():
     for _ in range(depth - 1):
         result = result["x"]
     assert result == {"x": None}
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        '<a><?xml version="1.0"?></a>',
+        ' <?xml version="1.0"?><a/>',
+        "<a><!DOCTYPE b></a>",
+    ],
+)
+def test_misplaced_declaration_raises(xml):
+    with pytest.raises(ExpatError):
+        xmltodict.parse(xml)
+    with pytest.raises(ExpatError):
+        xmltodict_rs.parse(xml)
+
+
+@pytest.mark.parametrize("xml", ['<?xml version="1.0"?><a/>', "<!DOCTYPE a><a/>"])
+def test_prolog_declarations_are_legal(xml):
+    assert xmltodict_rs.parse(xml) == xmltodict.parse(xml)
