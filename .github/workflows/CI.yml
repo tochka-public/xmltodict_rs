@@ -131,7 +131,9 @@ jobs:
           - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
           - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
           - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
-          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
+          # armv7: hypothesis charmap generation hangs under 32-bit QEMU;
+          # property tests are arch-independent and covered on native targets
+          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", pytest_args: "--ignore=tests/test_property_roundtrip.py" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -182,7 +184,7 @@ jobs:
             source .venv/bin/activate
             uv pip install xmltodict-rs --find-links dist --force-reinstall
             uv pip install --group test
-            pytest
+            pytest ${{ matrix.platform.pytest_args || '' }}
   windows:
     needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
