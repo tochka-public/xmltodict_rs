@@ -143,6 +143,14 @@ def test_attributes_with_special_chars():
     assert "@with_gt" in element
 
 
+def test_attribute_value_eol_normalization():
+    # Literal tab/CR/LF inside an attribute value are normalized to a single
+    # space per the XML attribute-value-normalization rules (expat does this
+    # too, so this must match xmltodict, not just be internally consistent).
+    xml = '<element attr="a\tb\nc\rd">content</element>'
+    compare_parsers(xml)
+
+
 def test_attributes_with_unicode():
     xml = '<element attr="Hello 世界" attr2="Тест">content</element>'
     result = xmltodict_rs.parse(xml)
@@ -288,6 +296,60 @@ def test_unicode_content(xml):
 )
 def test_special_characters(xml):
     compare_parsers(xml)
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        # Whitespace directly adjacent to an entity reference must survive:
+        # quick-xml reports entities as their own event, separate from the
+        # surrounding text, so only the whole run's outer edges get trimmed.
+        "<root>text &amp; more &lt;x&gt; text</root>",
+        "<root>  &amp;  </root>",
+        "<a>&#65;&#x42;C</a>",
+        # Whitespace directly adjacent to a child element must also survive.
+        "<a>  hello  <b/>  world  </a>",
+    ],
+)
+def test_whitespace_around_entities_and_children(xml):
+    compare_parsers(xml)
+
+
+@pytest.mark.parametrize("strip_whitespace", [True, False])
+def test_whitespace_around_entities_and_children_no_strip(strip_whitespace):
+    compare_parsers(
+        "<a>  hello  <b/>  world  </a>",
+        strip_whitespace=strip_whitespace,
+    )
+
+
+def test_undefined_entity_raises():
+    compare_parsers("<root>&undefined;</root>")
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        # Entity references resolved inline with surrounding text must NOT
+        # introduce cdata_separator between the entity and its neighboring
+        # text -- expat's buffer_text=True coalesces them into one
+        # characters() call, and xmltodict relies on that.
+        "<a>x &amp; y</a>",
+        "<a>x &#65; y</a>",
+        "<a>&amp;&amp;</a>",
+        "<a>&amp;x&amp;</a>",
+        "<a>x&amp;</a>",
+        "<a>&amp;x</a>",
+        # A child element IS a genuine fragment break, so the separator
+        # between the text before and after it must survive.
+        "<a>x<b>1</b>y</a>",
+        "<a>x<b>1</b>&amp;y</a>",
+        # CDATA sections are also a genuine fragment break.
+        "<a>x<![CDATA[cd]]>y</a>",
+    ],
+)
+def test_cdata_separator_not_injected_at_entity_boundaries(xml):
+    compare_parsers(xml, cdata_separator="|")
 
 
 def test_complex_real_world():

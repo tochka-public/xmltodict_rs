@@ -1,4 +1,5 @@
 import enum
+import platform
 import re
 from collections import OrderedDict
 
@@ -406,3 +407,44 @@ STR_SUBCLASS_OBJECTS = [
 @pytest.mark.parametrize("obj", STR_SUBCLASS_OBJECTS)
 def test_unparse_str_subclass(obj):
     compare_unparse(obj)
+
+
+def test_attr_control_chars_escaped():
+    d = {"root": {"@a": "x\ny\tz\rw"}}
+    ref = xmltodict.unparse(d, full_document=False)
+    rs = xmltodict_rs.unparse(d, full_document=False)
+    assert rs == ref
+    assert "&#10;" in rs and "&#9;" in rs and "&#13;" in rs
+
+
+def test_attr_control_chars_roundtrip():
+    d = {"root": {"@a": "line1\nline2"}}
+    assert xmltodict_rs.parse(xmltodict_rs.unparse(d)) == d
+
+
+def test_unparse_output_file_like():
+    import io
+
+    d = {"a": "1"}
+    ref_buf, rs_buf = io.StringIO(), io.StringIO()
+    ref_ret = xmltodict.unparse(d, output=ref_buf)
+    rs_ret = xmltodict_rs.unparse(d, output=rs_buf)
+    assert rs_ret is None and ref_ret is None
+    assert rs_buf.getvalue() == ref_buf.getvalue()
+
+
+@pytest.mark.skipif(
+    platform.machine().lower() not in {"x86_64", "amd64", "arm64", "aarch64"},
+    reason="stack-growth guard (stacker) is compiled only for x86_64/aarch64",
+)
+def test_deeply_nested_unparse_does_not_crash():
+    depth = 100_000
+    root = {}
+    cur = root
+    for _ in range(depth):
+        nxt = {}
+        cur["n"] = nxt
+        cur = nxt
+    cur["n"] = "x"
+    result = xmltodict_rs.unparse({"root": root})
+    assert result.count("<n>") == depth + 1

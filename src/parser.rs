@@ -56,6 +56,12 @@ pub struct XmlParser {
     pub path: Vec<String>,
     pub text_stack: Vec<Vec<String>>,
     pub namespace_stack: Vec<HashMap<String, String>>,
+    /// Parallel to `text_stack`: `true` while the current element has an
+    /// open "text run" -- the next `Text`/`GeneralRef` fragment is appended
+    /// to the last string instead of starting a new one (no `cdata_separator`
+    /// in between). Mirrors expat's `buffer_text=True`: child elements,
+    /// CDATA, comments and PIs flush the buffer and break the run.
+    text_run_open: Vec<bool>,
 }
 
 impl XmlParser {
@@ -73,6 +79,7 @@ impl XmlParser {
             path: Vec::new(),
             text_stack: Vec::new(),
             namespace_stack: Vec::new(),
+            text_run_open: Vec::new(),
         }
     }
 
@@ -102,29 +109,27 @@ impl XmlParser {
     }
 
     #[inline]
-    fn apply_postprocessor<'py>(
+    fn apply_postprocessor<'a, 'py>(
         &self,
         py: Python<'py>,
-        key: &str,
+        key: &'a str,
         data: &Bound<'py, PyAny>,
-    ) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
-        let mut final_key = key.to_owned();
-        let mut final_value = data.clone();
+    ) -> PyResult<Option<(std::borrow::Cow<'a, str>, Bound<'py, PyAny>)>> {
+        let Some(proc) = &self.postprocessor else {
+            return Ok(Some((std::borrow::Cow::Borrowed(key), data.clone())));
+        };
 
-        if let Some(proc) = &self.postprocessor {
-            let path_list = PyList::new(py, &self.path)?;
-            let result = proc.call1(py, (path_list, key, data))?;
+        let path_list = PyList::new(py, &self.path)?;
+        let result = proc.call1(py, (path_list, key, data))?;
 
-            if result.is_none(py) {
-                return Ok(None);
-            }
-
-            let tuple = result.bind(py).downcast::<PyTuple>()?;
-            final_key = tuple.get_item(0)?.extract::<String>()?;
-            final_value = tuple.get_item(1)?;
+        if result.is_none(py) {
+            return Ok(None);
         }
 
-        Ok(Some((final_key, final_value)))
+        let tuple = result.bind(py).cast::<PyTuple>()?;
+        let final_key = tuple.get_item(0)?.extract::<String>()?;
+        let final_value = tuple.get_item(1)?;
+        Ok(Some((std::borrow::Cow::Owned(final_key), final_value)))
     }
 
     fn push_data(
@@ -138,21 +143,21 @@ impl XmlParser {
             return Ok(());
         };
 
-        match item.get_item(final_key.as_str())? {
+        match item.get_item(final_key.as_ref())? {
             Some(existing) => {
-                if let Ok(list) = existing.downcast::<PyList>() {
-                    list.append(data.clone())?;
+                if let Ok(list) = existing.cast::<PyList>() {
+                    list.append(final_value)?;
                 } else {
-                    let new_list = PyList::new(py, [existing.clone(), final_value.clone()])?;
-                    item.set_item(final_key, &new_list)?;
+                    let new_list = PyList::new(py, [existing, final_value])?;
+                    item.set_item(final_key.as_ref(), &new_list)?;
                 }
             }
             None => {
-                if self.should_force_list(py, final_key.as_str(), final_value.as_ref())? {
-                    let new_list = PyList::new(py, [final_value.clone()])?;
-                    item.set_item(final_key, &new_list)?;
+                if self.should_force_list(py, final_key.as_ref(), final_value.as_ref())? {
+                    let new_list = PyList::new(py, [final_value])?;
+                    item.set_item(final_key.as_ref(), &new_list)?;
                 } else {
-                    item.set_item(final_key, final_value)?;
+                    item.set_item(final_key.as_ref(), final_value)?;
                 }
             }
         }
@@ -193,7 +198,11 @@ impl XmlParser {
         name: &str,
         attrs: &[quick_xml::events::attributes::Attribute],
     ) -> PyResult<()> {
-        let mut current_ns_map = self.namespace_stack.last().cloned().unwrap_or_default();
+        let mut current_ns_map = if self.config.process_namespaces {
+            self.namespace_stack.last().cloned().unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
 
         let element_dict = PyDict::new(py);
         let mut set_xmlns_item = false;
@@ -203,7 +212,7 @@ impl XmlParser {
             for attr in attrs {
                 let key = &attr.key;
                 let value_string = attr
-                    .unescape_value()
+                    .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                     .map_err(|e| expat_error(py, e.to_string()))?
                     .into_owned();
 
@@ -257,7 +266,9 @@ impl XmlParser {
             element_dict.set_item(xmlns_key, ns_py)?;
         }
 
-        self.namespace_stack.push(current_ns_map);
+        if self.config.process_namespaces {
+            self.namespace_stack.push(current_ns_map);
+        }
 
         if self.config.xml_attribs {
             for (key, value) in normal_attrs {
@@ -278,7 +289,7 @@ impl XmlParser {
                 else {
                     continue;
                 };
-                element_dict.set_item(final_key, final_value)?;
+                element_dict.set_item(final_key.as_ref(), final_value)?;
             }
         }
 
@@ -288,23 +299,31 @@ impl XmlParser {
             name.to_owned()
         };
 
+        // A child element is a structural break in the parent's text run: text
+        // before and after it must land in separate fragments (and therefore get
+        // `cdata_separator` between them), even though within each side entity
+        // references still coalesce with their neighboring text.
+        self.break_text_run();
+
         self.stack.push(element_dict.into());
         self.path.push(element_name);
         self.text_stack.push(Vec::new());
+        self.text_run_open.push(false);
 
         Ok(())
     }
 
-    pub fn end_element(&mut self, py: Python, name: &str) -> PyResult<()> {
-        let element_name = self.build_name(name);
-
+    pub fn end_element(&mut self, py: Python) -> PyResult<()> {
         let Some(current_element) = self.stack.pop() else {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
         let Some(text_parts) = self.text_stack.pop() else {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
-        let Some(_) = self.path.pop() else {
+        let Some(_) = self.text_run_open.pop() else {
+            return Err(expat_error(py, "unexpected closing tag".to_owned()));
+        };
+        let Some(element_name) = self.path.pop() else {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
         };
 
@@ -312,14 +331,24 @@ impl XmlParser {
             None
         } else {
             let joined = text_parts.join(&self.config.cdata_separator);
-            if self.config.strip_whitespace && joined.trim().is_empty() {
-                None
+            // Trim the fully joined text, not each fragment: fragments are split at
+            // child-element and entity-reference boundaries (quick-xml reports
+            // `&entity;`/`&#NN;` as their own events), so interior whitespace next
+            // to those boundaries must survive -- only the run's outer edges get
+            // stripped, matching xmltodict's `text.strip()` on the joined buffer.
+            if self.config.strip_whitespace {
+                let trimmed = joined.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_owned())
+                }
             } else {
                 Some(joined)
             }
         };
 
-        let element_dict = current_element.downcast_bound::<PyDict>(py)?;
+        let element_dict = current_element.cast_bound::<PyDict>(py)?;
         let has_attrs = !element_dict.is_empty();
 
         let final_value = match (has_attrs, text_content) {
@@ -332,7 +361,7 @@ impl XmlParser {
                         &self.config.cdata_key,
                         text.into_py_any(py)?.bind(py),
                     )? {
-                        dict.set_item(final_key, final_value)?;
+                        dict.set_item(final_key.as_ref(), final_value)?;
                     }
                     dict.into()
                 } else {
@@ -345,7 +374,7 @@ impl XmlParser {
                     &self.config.cdata_key,
                     text.into_py_any(py)?.bind(py),
                 )? {
-                    element_dict.set_item(final_key, final_value)?;
+                    element_dict.set_item(final_key.as_ref(), final_value)?;
                 }
                 current_element
             }
@@ -359,40 +388,72 @@ impl XmlParser {
             else {
                 return Ok(());
             };
-            if self.should_force_list(py, final_key.as_str(), final_value.as_ref())? {
+            if self.should_force_list(py, final_key.as_ref(), final_value.as_ref())? {
                 let new_list = PyList::new(py, [final_value.clone()])?;
-                result_dict.set_item(final_key, &new_list)?;
+                result_dict.set_item(final_key.as_ref(), &new_list)?;
             } else {
-                result_dict.set_item(final_key, final_value)?;
+                result_dict.set_item(final_key.as_ref(), final_value)?;
             }
             self.stack.push(result_dict.into());
         } else {
             let Some(parent) = self.stack.last() else {
                 return Err(expat_error(py, "unexpected closing tag".to_owned()));
             };
-            let parent_dict = parent.downcast_bound::<PyDict>(py)?;
+            let parent_dict = parent.cast_bound::<PyDict>(py)?;
 
             self.push_data(py, parent_dict, &element_name, final_value.bind(py))?;
         }
 
-        let Some(_) = self.namespace_stack.pop() else {
+        if self.config.process_namespaces && self.namespace_stack.pop().is_none() {
             return Err(expat_error(py, "unexpected closing tag".to_owned()));
-        };
+        }
 
         Ok(())
     }
 
-    pub fn characters(&mut self, data: &str) {
+    /// Append text content for the current element.
+    ///
+    /// `coalesce` distinguishes `Text`/`GeneralRef` events (`true`) from `CData`
+    /// events (`false`). Coalescible fragments merge into the last fragment as
+    /// long as no structural break (child element start, or a non-coalescible
+    /// fragment) happened since -- see `text_run_open` for why.
+    pub fn characters(&mut self, data: &str, coalesce: bool) {
+        let run_open = self.text_run_open.last().copied().unwrap_or(false);
+
+        if coalesce && run_open {
+            if let Some(current_text) = self.text_stack.last_mut().and_then(|v| v.last_mut()) {
+                current_text.push_str(data);
+                return;
+            }
+        }
+
         if let Some(current_text) = self.text_stack.last_mut() {
             current_text.push(data.to_owned());
         }
+        if let Some(run_open) = self.text_run_open.last_mut() {
+            *run_open = coalesce;
+        }
     }
 
-    pub fn comment(&self, py: Python, comment: &str) -> PyResult<()> {
+    /// Close the current element's text run: the next coalescible fragment
+    /// starts a new entry in `text_stack` (and so picks up a
+    /// `cdata_separator` from whatever preceded it), instead of appending to
+    /// the previous one. expat's `buffer_text=True` mode flushes the text
+    /// buffer on any markup -- child elements, CDATA sections, comments, and
+    /// processing instructions all qualify. No-op outside an open element
+    /// (empty `text_run_open`, i.e. at the document top level).
+    pub fn break_text_run(&mut self) {
+        if let Some(run_open) = self.text_run_open.last_mut() {
+            *run_open = false;
+        }
+    }
+
+    pub fn comment(&mut self, py: Python, comment: &str) -> PyResult<()> {
+        self.break_text_run();
         let Some(parent) = self.stack.last() else {
             return Ok(());
         };
-        let parent_dict = parent.downcast_bound::<PyDict>(py)?;
+        let parent_dict = parent.cast_bound::<PyDict>(py)?;
         let comment_py = if self.config.strip_whitespace {
             comment.trim().into_pyobject(py)?
         } else {

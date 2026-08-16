@@ -39,6 +39,30 @@ use std::io::{BufRead, BufReader};
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+/// Decode UTF-8 bytes, mapping invalid sequences to `UnicodeDecodeError`
+/// (matches the automatic `From<std::str::Utf8Error>` conversion that pyo3
+/// provided before 0.29 removed it).
+fn utf8_str(bytes: &[u8]) -> PyResult<&str> {
+    std::str::from_utf8(bytes)
+        .map_err(|e| pyo3::exceptions::PyUnicodeDecodeError::new_err(e.to_string()))
+}
+
+/// Resolve a `&entity;`/`&#NN;` reference (a standalone event in quick-xml
+/// 0.41). Char refs and the five predefined entities only -- DTD-declared
+/// entities stay unsupported (`disable_entities=False` is unimplemented).
+fn resolve_general_ref(py: Python, r: &quick_xml::events::BytesRef) -> PyResult<String> {
+    if let Some(ch) = r
+        .resolve_char_ref()
+        .map_err(|e| map_quick_xml_error(py, e))?
+    {
+        return Ok(ch.to_string());
+    }
+    let name = r.decode().map_err(|e| expat_error(py, e.to_string()))?;
+    quick_xml::escape::resolve_predefined_entity(&name)
+        .map(str::to_owned)
+        .ok_or_else(|| expat_error(py, format!("undefined entity &{name};")))
+}
+
 fn is_generator(py: Python, xml_input: &Bound<'_, PyAny>) -> PyResult<bool> {
     let types = PyModule::import(py, "types")?;
     let generator_type = types.getattr("GeneratorType")?;
@@ -46,18 +70,18 @@ fn is_generator(py: Python, xml_input: &Bound<'_, PyAny>) -> PyResult<bool> {
 }
 
 fn extract_hashmap(py: Python, dict_input: &Py<PyAny>) -> PyResult<HashMap<String, String>> {
-    let dict = dict_input.downcast_bound::<PyDict>(py).map_err(|_err| {
+    let dict = dict_input.cast_bound::<PyDict>(py).map_err(|_err| {
         PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespaces must be a dictionary")
     })?;
 
     let mut hashmap = HashMap::with_capacity(dict.len());
 
     for (key, value) in dict {
-        let key_str = key.downcast::<PyString>().map_err(|_err| {
+        let key_str = key.cast::<PyString>().map_err(|_err| {
             PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace keys must be strings")
         })?;
 
-        let value_str = value.downcast::<PyString>().map_err(|_err| {
+        let value_str = value.cast::<PyString>().map_err(|_err| {
             PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace values must be strings")
         })?;
 
@@ -67,68 +91,170 @@ fn extract_hashmap(py: Python, dict_input: &Py<PyAny>) -> PyResult<HashMap<Strin
     Ok(hashmap)
 }
 
+/// The "junk after document element" `ExpatError`, raised whenever markup or
+/// non-whitespace text is seen after the root element has closed.
+fn junk_after_root_error(py: Python) -> PyErr {
+    expat_error(py, "junk after document element".to_owned())
+}
+
+/// Text (or a resolved entity reference) seen while `path` is empty: before
+/// the root it is a syntax error, after the root it is trailing junk.
+fn text_outside_root_error(py: Python, root_closed: bool) -> PyErr {
+    let msg = if root_closed {
+        "junk after document element"
+    } else {
+        "syntax error"
+    };
+    expat_error(py, msg.to_owned())
+}
+
+/// A DOCTYPE is only legal in the prolog: before the root element opens.
+fn validate_doctype_placement(py: Python, in_root: bool, root_closed: bool) -> PyResult<()> {
+    if root_closed {
+        return Err(junk_after_root_error(py));
+    }
+    if in_root {
+        return Err(expat_error(
+            py,
+            "not well-formed (invalid token)".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// The XML declaration is only legal as the document's very first token
+/// (expat: "XML or text declaration not at start of entity" -- even leading
+/// whitespace before it is an error).
+fn validate_decl_placement(py: Python, at_document_start: bool) -> PyResult<()> {
+    if at_document_start {
+        return Ok(());
+    }
+    Err(expat_error(
+        py,
+        "XML or text declaration not at start of entity".to_owned(),
+    ))
+}
+
+/// Shared `Start`/`Empty` handling: validate the tag name and feed its
+/// attributes to the parser. Callers are responsible for the `root_closed`
+/// guard and (for `Empty`) the matching `end_element` call.
+fn parse_start_tag(
+    py: Python,
+    parser: &mut XmlParser,
+    e: &quick_xml::events::BytesStart,
+) -> PyResult<()> {
+    let name = utf8_str(e.name().into_inner())?;
+    validate_element_name(py, name)?;
+    let attrs: Vec<_> = e
+        .attributes()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| expat_error(py, e.to_string()))?;
+    parser.start_element(py, name, &attrs)
+}
+
 fn parse_xml_with_reader<R: BufRead>(
     py: Python,
     reader: R,
     config: &ParseConfig,
     force_list: Option<Py<PyAny>>,
     postprocessor: Option<Py<PyAny>>,
-    strip_whitespace: bool,
     process_comments: bool,
 ) -> PyResult<Py<PyAny>> {
     let mut parser = XmlParser::new(config.clone(), force_list, postprocessor);
     let mut xml_reader = Reader::from_reader(reader);
-    xml_reader
-        .trim_text(strip_whitespace)
-        .check_end_names(true)
-        .check_comments(true)
-        .expand_empty_elements(true);
+    let reader_config = xml_reader.config_mut();
+    // Whitespace stripping is handled ourselves in `XmlParser::end_element` on the
+    // fully joined text of an element, not per-event here: quick-xml 0.41 reports
+    // `&entity;`/`&#NN;` references as standalone `Event::GeneralRef` events, so a
+    // text run like "a &amp; b" now arrives as three events ("a ", GeneralRef, " b")
+    // instead of one. Trimming each event individually (the pre-0.41 approach) would
+    // eat the whitespace adjacent to every entity instead of just the run's edges.
+    reader_config.check_end_names = true;
+    reader_config.check_comments = true;
+    reader_config.expand_empty_elements = true;
 
     let mut buf = Vec::with_capacity(128);
+    let mut root_closed = false;
+    // expat allows the XML declaration only as the very first thing in the
+    // document -- even leading whitespace before it is an error.
+    let mut at_document_start = true;
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let name = std::str::from_utf8(e.name().into_inner())?;
-                validate_element_name(py, name)?;
-                let attrs: Vec<_> = e
-                    .attributes()
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| expat_error(py, e.to_string()))?;
-                parser.start_element(py, name, &attrs)?;
+                if root_closed {
+                    return Err(junk_after_root_error(py));
+                }
+                parse_start_tag(py, &mut parser, e)?;
             }
             Ok(Event::End(ref e)) => {
-                let name = std::str::from_utf8(e.name().into_inner())?;
+                let name = utf8_str(e.name().into_inner())?;
                 validate_element_name(py, name)?;
-                parser.end_element(py, name)?;
+                parser.end_element(py)?;
+                if parser.path.is_empty() {
+                    root_closed = true;
+                }
             }
             Ok(Event::Empty(ref e)) => {
-                let name = std::str::from_utf8(e.name().into_inner())?;
-                validate_element_name(py, name)?;
-
-                let attrs: Vec<_> = e
-                    .attributes()
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| expat_error(py, e.to_string()))?;
-                parser.start_element(py, name, &attrs)?;
-                parser.end_element(py, name)?;
+                if root_closed {
+                    return Err(junk_after_root_error(py));
+                }
+                parse_start_tag(py, &mut parser, e)?;
+                parser.end_element(py)?;
+                if parser.path.is_empty() {
+                    root_closed = true;
+                }
             }
             Ok(Event::Text(ref e)) => {
-                let text = e.unescape().map_err(|e| expat_error(py, e.to_string()))?;
-                parser.characters(&text);
+                let text = e.decode().map_err(|e| expat_error(py, e.to_string()))?;
+                if parser.path.is_empty() && !text.trim().is_empty() {
+                    return Err(text_outside_root_error(py, root_closed));
+                }
+                parser.characters(&text, true);
+            }
+            Ok(Event::GeneralRef(ref e)) => {
+                if parser.path.is_empty() {
+                    return Err(text_outside_root_error(py, root_closed));
+                }
+                let resolved = resolve_general_ref(py, e)?;
+                parser.characters(&resolved, true);
             }
             Ok(Event::CData(ref e)) => {
-                parser.characters(std::str::from_utf8(e.as_ref())?);
+                if parser.path.is_empty() {
+                    return Err(junk_after_root_error(py));
+                }
+                parser.characters(utf8_str(e.as_ref())?, false);
             }
-            Ok(Event::Comment(ref e)) if process_comments => {
-                parser.comment(py, std::str::from_utf8(e.as_ref())?)?;
+            Ok(Event::Comment(ref e)) => {
+                // Comments are markup: they close the current element's text
+                // run regardless of `process_comments` (matches expat's
+                // `buffer_text=True` flush-on-any-markup semantics), and are
+                // only ever collected into the tree when requested.
+                if process_comments {
+                    parser.comment(py, utf8_str(e.as_ref())?)?;
+                } else {
+                    parser.break_text_run();
+                }
             }
+            Ok(Event::PI(_)) => {
+                // Processing instructions are markup too: same text-run break
+                // as comments. `xmltodict` never surfaces PI content, and a
+                // PI is legal Misc content both before and after the root
+                // element, so no `root_closed` check here.
+                parser.break_text_run();
+            }
+            // A PI in the same positions is legal Misc content and is
+            // handled separately above (no placement check).
+            Ok(Event::DocType(_)) => {
+                validate_doctype_placement(py, !parser.path.is_empty(), root_closed)?;
+            }
+            Ok(Event::Decl(_)) => validate_decl_placement(py, at_document_start)?,
             Ok(Event::Eof) => {
                 break;
             }
             Err(e) => return Err(map_quick_xml_error(py, e)),
-            _ => {}
         }
+        at_document_start = false;
         buf.clear();
     }
 
@@ -152,7 +278,7 @@ fn parse_xml_with_reader<R: BufRead>(
 #[pyfunction]
 #[pyo3(signature = (
     xml_input,
-    _encoding = None,
+    encoding = None,
     process_namespaces = false,
     namespace_separator = ":",
     disable_entities = true,
@@ -166,13 +292,14 @@ fn parse_xml_with_reader<R: BufRead>(
     force_list = None,
     postprocessor = None,
     item_depth = 0,
+    item_callback = None,
     comment_key = "#comment",
     namespaces = None,
 ))]
 fn parse(
     py: Python,
     xml_input: &Bound<'_, PyAny>,
-    _encoding: Option<&str>,
+    encoding: Option<&str>,
     process_namespaces: bool,
     namespace_separator: &str,
     disable_entities: bool,
@@ -186,9 +313,28 @@ fn parse(
     force_list: Option<Py<PyAny>>,
     postprocessor: Option<Py<PyAny>>,
     item_depth: usize,
+    item_callback: Option<&Bound<'_, PyAny>>,
     comment_key: &str,
     namespaces: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
+    if item_depth > 0 || item_callback.is_some() {
+        return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
+            "streaming mode (item_depth/item_callback) is not implemented in xmltodict_rs",
+        ));
+    }
+    if !disable_entities {
+        return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
+            "disable_entities=False (DTD entity expansion) is not implemented in xmltodict_rs",
+        ));
+    }
+    if let Some(enc) = encoding {
+        if !enc.eq_ignore_ascii_case("utf-8") && !enc.eq_ignore_ascii_case("utf8") {
+            return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
+                format!("encoding '{enc}' is not supported, only UTF-8"),
+            ));
+        }
+    }
+
     let namespaces_rs = namespaces
         .map(|dict_py| extract_hashmap(py, &dict_py))
         .transpose()?;
@@ -202,14 +348,11 @@ fn parse(
         strip_whitespace,
         namespace_separator: NamespaceSeparator::new(namespace_separator),
         process_namespaces,
-        process_comments,
         comment_key: CommentKey::new(comment_key),
-        item_depth,
-        disable_entities,
         namespaces: namespaces_rs,
     };
 
-    if let Ok(xml_str) = xml_input.downcast::<PyString>() {
+    if let Ok(xml_str) = xml_input.cast::<PyString>() {
         let text = xml_str.to_str()?;
         return parse_xml_with_reader(
             py,
@@ -217,19 +360,17 @@ fn parse(
             &config,
             force_list,
             postprocessor,
-            strip_whitespace,
             process_comments,
         );
     }
 
-    if let Ok(xml_bytes) = xml_input.downcast::<PyBytes>() {
+    if let Ok(xml_bytes) = xml_input.cast::<PyBytes>() {
         return parse_xml_with_reader(
             py,
             xml_bytes.as_bytes(),
             &config,
             force_list,
             postprocessor,
-            strip_whitespace,
             process_comments,
         );
     }
@@ -243,7 +384,6 @@ fn parse(
                 &config,
                 force_list,
                 postprocessor,
-                strip_whitespace,
                 process_comments,
             );
         }
@@ -257,7 +397,6 @@ fn parse(
             &config,
             force_list,
             postprocessor,
-            strip_whitespace,
             process_comments,
         );
     }
@@ -269,7 +408,6 @@ fn parse(
         &config,
         force_list,
         postprocessor,
-        strip_whitespace,
         process_comments,
     )
 }
@@ -279,7 +417,7 @@ fn parse(
 #[pyfunction]
 #[pyo3(signature = (
     input_dict,
-    _output = None,
+    output = None,
     encoding = "utf-8",
     full_document = true,
     short_empty_elements = false,
@@ -293,7 +431,7 @@ fn parse(
 fn unparse(
     py: Python,
     input_dict: &Bound<'_, PyDict>,
-    _output: Option<&Bound<'_, PyAny>>,
+    output: Option<&Bound<'_, PyAny>>,
     encoding: &str,
     full_document: bool,
     short_empty_elements: bool,
@@ -342,6 +480,12 @@ fn unparse(
     }
 
     let result = writer.finish();
+
+    if let Some(out) = output {
+        out.call_method1("write", (result,))?;
+        return Ok(py.None());
+    }
+
     Ok(result.into_pyobject(py)?.into_any().unbind())
 }
 

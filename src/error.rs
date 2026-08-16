@@ -2,9 +2,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyModule, PyType};
 use std::io;
 
-/// Wrapper to store `PyErr` inside `io::Error` while preserving the original exception type.
-/// `PyErr` is Send but not Sync, so we need unsafe impl Sync.
-/// This is safe because we only access the inner `PyErr` while holding the GIL.
+/// Wrapper to store `PyErr` inside `io::Error` while preserving the original
+/// exception type. `PyErr` is already `Send + Sync` in pyo3 0.26+, so the
+/// wrapper needs no unsafe impls.
 pub struct WrappedPyErr(pub PyErr);
 
 impl std::fmt::Debug for WrappedPyErr {
@@ -29,11 +29,6 @@ impl std::fmt::Display for WrappedPyErr {
 
 impl std::error::Error for WrappedPyErr {}
 
-// SAFETY: PyErr is Send. We implement Sync because WrappedPyErr is only
-// accessed while holding the GIL (via Python::attach), which provides
-// the necessary synchronization.
-unsafe impl Sync for WrappedPyErr {}
-
 pub fn pyerr_to_io(err: &PyErr) -> io::Error {
     Python::attach(|py| io::Error::other(WrappedPyErr(err.clone_ref(py))))
 }
@@ -48,7 +43,7 @@ pub fn expat_error(py: Python, msg: String) -> PyErr {
     let expat_type = PyModule::import(py, "xml.parsers.expat")
         .and_then(|m| m.getattr("ExpatError"))
         .ok()
-        .and_then(|t| t.downcast_into::<PyType>().ok());
+        .and_then(|t| t.cast_into::<PyType>().ok());
     match expat_type {
         Some(ty) => PyErr::from_type(ty, msg),
         None => PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("XML parse error: {msg}")),
@@ -70,17 +65,11 @@ pub fn map_quick_xml_error(py: Python, err: quick_xml::Error) -> PyErr {
         quick_xml::Error::Io(io_err) => {
             pyerr_from_io(&io_err).unwrap_or_else(|| expat_error(py, io_err.to_string()))
         }
-        other @ (quick_xml::Error::NonDecodable(_)
-        | quick_xml::Error::UnexpectedEof(_)
-        | quick_xml::Error::EndEventMismatch { .. }
-        | quick_xml::Error::UnexpectedToken(_)
-        | quick_xml::Error::UnexpectedBang(_)
-        | quick_xml::Error::TextNotFound
-        | quick_xml::Error::XmlDeclWithoutVersion(_)
-        | quick_xml::Error::EmptyDocType
+        other @ (quick_xml::Error::Syntax(_)
+        | quick_xml::Error::IllFormed(_)
         | quick_xml::Error::InvalidAttr(_)
-        | quick_xml::Error::EscapeError(_)
-        | quick_xml::Error::UnknownPrefix(_)
-        | quick_xml::Error::InvalidPrefixBind { .. }) => expat_error(py, other.to_string()),
+        | quick_xml::Error::Encoding(_)
+        | quick_xml::Error::Escape(_)
+        | quick_xml::Error::Namespace(_)) => expat_error(py, other.to_string()),
     }
 }

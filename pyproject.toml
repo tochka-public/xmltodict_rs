@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.9.3"]
+requires = ["maturin>=1.14"]
 build-backend = "maturin"
 
 [project]
@@ -9,7 +9,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
 classifiers = [
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -32,17 +31,19 @@ package-data = { "xmltodict_rs" = ["py.typed", "*.pyi"] }
 
 [dependency-groups]
 dev = [
-    "maturin>=1.9.3",
+    "maturin>=1.14",
     "psutil>=7.0.0",
     "pytest>=8.4.1",
     "xmltodict==0.13.0",
     "ruff>=0.13.0",
     "pre-commit>=4.3.0",
+    "hypothesis>=6.100",
 ]
 test = [
     "pytest>=8.0.0",
     "pytest-benchmark>=4.0.0",
     "xmltodict==0.13.0",
+    "hypothesis>=6.100",
 ]
 
 [tool.maturin]

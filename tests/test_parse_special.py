@@ -1,3 +1,5 @@
+from xml.parsers.expat import ExpatError
+
 import pytest
 import xmltodict
 
@@ -113,6 +115,27 @@ def test_ignore_comments(xml):
     compare_parsers(xml, process_comments=False)
 
 
+# Comments/PIs must break the current element's text run (regression: a
+# comment or PI used to silently re-coalesce the text on either side of it,
+# dropping the `cdata_separator` that should land between the two halves).
+
+
+def test_comment_breaks_text_run():
+    compare_parsers("<a>x<!--c-->y</a>", cdata_separator="|")
+
+
+def test_comment_breaks_text_run_with_process_comments():
+    compare_parsers("<a>x<!--c-->y</a>", cdata_separator="|", process_comments=True)
+
+
+def test_pi_breaks_text_run():
+    compare_parsers("<a>x<?pi?>y</a>", cdata_separator="|")
+
+
+def test_comment_then_entity_does_not_recoalesce():
+    compare_parsers("<a>x<!--c-->&amp;y</a>", cdata_separator="|")
+
+
 # XML declaration tests
 
 
@@ -210,3 +233,68 @@ def test_multiple_processing_instructions():
     <root>content</root>"""
     result = xmltodict_rs.parse(xml)
     assert result == {"root": "content"}
+
+
+# Junk outside root tests
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        "<a>1</a>junk",
+        "<a/><b/>",
+        "<a/>text",
+        "junk<a/>",
+        "<a/><!DOCTYPE b>",
+        '<a/><?xml version="1.0"?>',
+    ],
+)
+def test_junk_outside_root_raises(xml):
+    with pytest.raises(ExpatError):
+        xmltodict.parse(xml)
+    with pytest.raises(ExpatError):
+        xmltodict_rs.parse(xml)
+
+
+def test_pi_after_root_is_legal():
+    # Unlike DOCTYPE/decl, a processing instruction after the root is legal
+    # Misc content and must not be rejected as junk.
+    compare_parsers("<a/><?pi?>")
+
+
+@pytest.mark.parametrize("xml", ["<a/>\n", "  <a/>  ", "<a>1</a>\t\n"])
+def test_whitespace_outside_root_is_legal(xml):
+    assert xmltodict_rs.parse(xml) == xmltodict.parse(xml)
+    # and with whitespace stripping disabled
+    assert xmltodict_rs.parse(xml, strip_whitespace=False) == xmltodict.parse(
+        xml, strip_whitespace=False
+    )
+
+
+def test_deeply_nested_parse():
+    depth = 50_000
+    xml = "<x>" * depth + "</x>" * depth
+    result = xmltodict_rs.parse(xml)
+    for _ in range(depth - 1):
+        result = result["x"]
+    assert result == {"x": None}
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        '<a><?xml version="1.0"?></a>',
+        ' <?xml version="1.0"?><a/>',
+        "<a><!DOCTYPE b></a>",
+    ],
+)
+def test_misplaced_declaration_raises(xml):
+    with pytest.raises(ExpatError):
+        xmltodict.parse(xml)
+    with pytest.raises(ExpatError):
+        xmltodict_rs.parse(xml)
+
+
+@pytest.mark.parametrize("xml", ['<?xml version="1.0"?><a/>', "<!DOCTYPE a><a/>"])
+def test_prolog_declarations_are_legal(xml):
+    assert xmltodict_rs.parse(xml) == xmltodict.parse(xml)

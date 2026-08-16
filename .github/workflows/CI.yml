@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+# NOTE: no benchmark job here on purpose. Shared GitHub-hosted runners are too
+# noisy for perf gating (see Task 0 rationale in docs/plans) — benchmarks run
+# locally/out-of-band via `just bench`, not in CI.
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -28,26 +32,58 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y python3-dev
+      # Single source of truth for the toolchain is rust-toolchain.toml.
+      # dtolnay/rust-toolchain does NOT read that file and requires an
+      # explicit input, so extract the channel and pass it through.
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          if [[ -z "$channel" ]]; then
+            echo "failed to read channel from rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.91.0
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
       - name: cargo fmt
         run: cargo fmt --check
       - name: cargo clippy
         run: cargo clippy --all-targets --all-features
+      - name: cargo test
+        run: cargo test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: |
+          set -e
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install Python lint deps
+        run: uv sync --only-group dev --no-install-project
+      - name: ruff check
+        run: uv run --no-sync ruff check .
+      - name: ruff format check
+        run: uv run --no-sync ruff format --check .
   linux:
     needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
         platform:
-          - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
-          - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
-          - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t", no_default_features: true }
-          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t", no_default_features: true }
-          - { runner: ubuntu-22.04, target: s390x, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t", no_default_features: true }
-          - { runner: ubuntu-22.04, target: ppc64le, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t", no_default_features: true }
+          - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", no_default_features: true }
+          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", no_default_features: true }
+          - { runner: ubuntu-22.04, target: s390x, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", no_default_features: true }
+          - { runner: ubuntu-22.04, target: ppc64le, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t", no_default_features: true }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -86,13 +122,14 @@ jobs:
   musllinux:
     needs: [checks]
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
     strategy:
       matrix:
         platform:
-          - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
-          - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
-          - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
-          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: x86_64, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: aarch64, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
+          - { runner: ubuntu-22.04, target: armv7, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -138,6 +175,7 @@ jobs:
           run: |
             set -e
             export PATH="$HOME/.local/bin:$PATH"
+            export HYPOTHESIS_PROFILE=ci-emulated
             uv venv
             source .venv/bin/activate
             uv pip install xmltodict-rs --find-links dist --force-reinstall
@@ -149,8 +187,8 @@ jobs:
     strategy:
       matrix:
         platform:
-          - { runner: windows-latest, target: x64, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
-          - { runner: windows-latest, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
+          - { runner: windows-latest, target: x64, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
+          - { runner: windows-latest, target: x86, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -191,16 +229,29 @@ jobs:
     strategy:
       matrix:
         platform:
-          - { runner: macos-14, target: aarch64, rust_target: aarch64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
-          - { runner: macos-15-intel, target: x86_64, rust_target: x86_64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.13t 3.14 3.14t" }
+          - { runner: macos-14, target: aarch64, rust_target: aarch64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
+          - { runner: macos-15-intel, target: x86_64, rust_target: x86_64-apple-darwin, interpreter: "3.10 3.11 3.12 3.13 3.14 3.14t" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: 3.12
+      # Single source of truth for the toolchain is rust-toolchain.toml —
+      # extracted explicitly because dtolnay/rust-toolchain does not read it
+      # (see checks job above).
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          if [[ -z "$channel" ]]; then
+            echo "failed to read channel from rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.91.0
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           targets: ${{ matrix.platform.rust_target }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
