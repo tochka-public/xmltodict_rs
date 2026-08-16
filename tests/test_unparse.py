@@ -1,4 +1,5 @@
 import enum
+import platform
 import re
 from collections import OrderedDict
 
@@ -432,6 +433,10 @@ def test_unparse_output_file_like():
     assert rs_buf.getvalue() == ref_buf.getvalue()
 
 
+@pytest.mark.skipif(
+    platform.machine().lower() not in {"x86_64", "amd64", "arm64", "aarch64"},
+    reason="stack-growth guard (stacker) is compiled only for x86_64/aarch64",
+)
 def test_deeply_nested_unparse_does_not_crash():
     depth = 100_000
     root = {}

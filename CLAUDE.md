@@ -98,6 +98,10 @@ match the same-numbered reference version. Public OSS
   Limitations". Adding real support for any of them is a new feature, not a
   bug fix — track it as a fresh plan, not an amendment to
   `docs/plans/2026-08-12-review-fixes.md` (closed).
+- **Deep-nesting stack guard (stacker) is x86_64/aarch64-only** -- psm
+  stack switching hangs/segfaults on 32-bit ARM (observed under QEMU);
+  other targets fall back to plain recursion, extreme unparse nesting may
+  overflow there (see README "Deep-nesting stack guard").
 - **Performance changes are not accepted without a benchmark**: measure
   `just bench` before and after, record the numbers in the active plan's
   ledger; no win — revert.

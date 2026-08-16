@@ -98,10 +98,20 @@ impl XmlWriter {
     ) -> PyResult<()> {
         // Grow the stack in heap-allocated segments: deeply nested input dicts
         // must not overflow the OS thread stack (that would kill the whole
-        // Python process with SIGSEGV).
-        stacker::maybe_grow(64 * 1024, 1024 * 1024, || {
+        // Python process with SIGSEGV). Only on targets where stacker/psm
+        // stack switching is verified -- on 32-bit ARM it hangs or segfaults
+        // (observed under QEMU); other targets fall back to plain recursion
+        // (pre-guard behavior: extreme nesting may overflow).
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        {
+            stacker::maybe_grow(64 * 1024, 1024 * 1024, || {
+                self.write_element_inner(py, tag, value, needs_newline)
+            })
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        {
             self.write_element_inner(py, tag, value, needs_newline)
-        })
+        }
     }
 
     fn write_element_inner(

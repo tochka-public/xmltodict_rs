@@ -166,6 +166,14 @@ Found by differential audit against `xmltodict==0.13.0`; corner cases, not
   (indentation/newline placement around the list, not the element content
   itself).
 
+### Deep-nesting stack guard
+
+The guard that lets `unparse()` handle arbitrarily deep dicts without
+overflowing the thread stack (via [stacker](https://crates.io/crates/stacker))
+is compiled only for x86_64 and aarch64 -- the platforms where its stack
+switching is verified. On other targets (32-bit ARM, s390x, ppc64le)
+extremely deep nesting may overflow the stack, as it did before 0.13.10.
+
 ## Development
 
 ### Setup
