@@ -16,23 +16,23 @@ PostprocessorFunc = Callable[[list[str], str, Any], tuple[str, Any] | None]
 PreprocessorFunc = Callable[[str, Any], tuple[str, Any] | None]
 
 def parse(
-        xml_input: XMLInput,
-        encoding: str | None = None,
-        process_namespaces: bool = False,
-        namespace_separator: str = ":",
-        disable_entities: bool = True,
-        process_comments: bool = False,
-        xml_attribs: bool = True,
-        attr_prefix: str = "@",
-        cdata_key: str = "#text",
-        force_cdata: bool = False,
-        cdata_separator: str = "",
-        strip_whitespace: bool = True,
-        force_list: bool | Collection[str] | Callable[[list[str], str, Any], bool] | None = None,
-        postprocessor: PostprocessorFunc | None = None,
-        item_depth: int = 0,
-        comment_key: str = "#comment",
-        namespaces: dict[str, str] | None = None,
+    xml_input: XMLInput,
+    encoding: str | None = None,
+    process_namespaces: bool = False,
+    namespace_separator: str = ":",
+    disable_entities: bool = True,
+    process_comments: bool = False,
+    xml_attribs: bool = True,
+    attr_prefix: str = "@",
+    cdata_key: str = "#text",
+    force_cdata: bool = False,
+    cdata_separator: str = "",
+    strip_whitespace: bool = True,
+    force_list: bool | Collection[str] | Callable[[list[str], str, Any], bool] | None = None,
+    postprocessor: PostprocessorFunc | None = None,
+    item_depth: int = 0,
+    comment_key: str = "#comment",
+    namespaces: dict[str, str] | None = None,
 ) -> XMLDict:
     """Parse XML string or bytes into a Python dictionary.
 
@@ -86,17 +86,17 @@ def parse(
     ...
 
 def unparse(
-        input_dict: XMLDict,
-        output: str | None = None,
-        encoding: str = "utf-8",
-        full_document: bool = True,
-        short_empty_elements: bool = False,
-        attr_prefix: str = "@",
-        cdata_key: str = "#text",
-        pretty: bool = False,
-        newl: str = "\n",
-        indent: str = "\t",
-        preprocessor: PreprocessorFunc | None = None,
+    input_dict: XMLDict,
+    output: str | None = None,
+    encoding: str = "utf-8",
+    full_document: bool = True,
+    short_empty_elements: bool = False,
+    attr_prefix: str = "@",
+    cdata_key: str = "#text",
+    pretty: bool = False,
+    newl: str = "\n",
+    indent: str = "\t",
+    preprocessor: PreprocessorFunc | None = None,
 ) -> str:
     r"""Convert Python dictionary back to XML string.
 
