@@ -48,7 +48,7 @@ pub fn expat_error(py: Python, msg: String) -> PyErr {
     let expat_type = PyModule::import(py, "xml.parsers.expat")
         .and_then(|m| m.getattr("ExpatError"))
         .ok()
-        .and_then(|t| t.downcast_into::<PyType>().ok());
+        .and_then(|t| t.cast_into::<PyType>().ok());
     match expat_type {
         Some(ty) => PyErr::from_type(ty, msg),
         None => PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("XML parse error: {msg}")),

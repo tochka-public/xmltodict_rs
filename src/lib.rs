@@ -46,18 +46,18 @@ fn is_generator(py: Python, xml_input: &Bound<'_, PyAny>) -> PyResult<bool> {
 }
 
 fn extract_hashmap(py: Python, dict_input: &Py<PyAny>) -> PyResult<HashMap<String, String>> {
-    let dict = dict_input.downcast_bound::<PyDict>(py).map_err(|_err| {
+    let dict = dict_input.cast_bound::<PyDict>(py).map_err(|_err| {
         PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespaces must be a dictionary")
     })?;
 
     let mut hashmap = HashMap::with_capacity(dict.len());
 
     for (key, value) in dict {
-        let key_str = key.downcast::<PyString>().map_err(|_err| {
+        let key_str = key.cast::<PyString>().map_err(|_err| {
             PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace keys must be strings")
         })?;
 
-        let value_str = value.downcast::<PyString>().map_err(|_err| {
+        let value_str = value.cast::<PyString>().map_err(|_err| {
             PyErr::new::<pyo3::exceptions::PyTypeError, _>("namespace values must be strings")
         })?;
 
@@ -89,7 +89,8 @@ fn parse_xml_with_reader<R: BufRead>(
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let name = std::str::from_utf8(e.name().into_inner())?;
+                let name = std::str::from_utf8(e.name().into_inner())
+                    .map_err(|err| expat_error(py, err.to_string()))?;
                 validate_element_name(py, name)?;
                 let attrs: Vec<_> = e
                     .attributes()
@@ -98,12 +99,14 @@ fn parse_xml_with_reader<R: BufRead>(
                 parser.start_element(py, name, &attrs)?;
             }
             Ok(Event::End(ref e)) => {
-                let name = std::str::from_utf8(e.name().into_inner())?;
+                let name = std::str::from_utf8(e.name().into_inner())
+                    .map_err(|err| expat_error(py, err.to_string()))?;
                 validate_element_name(py, name)?;
                 parser.end_element(py, name)?;
             }
             Ok(Event::Empty(ref e)) => {
-                let name = std::str::from_utf8(e.name().into_inner())?;
+                let name = std::str::from_utf8(e.name().into_inner())
+                    .map_err(|err| expat_error(py, err.to_string()))?;
                 validate_element_name(py, name)?;
 
                 let attrs: Vec<_> = e
@@ -118,10 +121,14 @@ fn parse_xml_with_reader<R: BufRead>(
                 parser.characters(&text);
             }
             Ok(Event::CData(ref e)) => {
-                parser.characters(std::str::from_utf8(e.as_ref())?);
+                let text = std::str::from_utf8(e.as_ref())
+                    .map_err(|err| expat_error(py, err.to_string()))?;
+                parser.characters(text);
             }
             Ok(Event::Comment(ref e)) if process_comments => {
-                parser.comment(py, std::str::from_utf8(e.as_ref())?)?;
+                let text = std::str::from_utf8(e.as_ref())
+                    .map_err(|err| expat_error(py, err.to_string()))?;
+                parser.comment(py, text)?;
             }
             Ok(Event::Eof) => {
                 break;
@@ -209,7 +216,7 @@ fn parse(
         namespaces: namespaces_rs,
     };
 
-    if let Ok(xml_str) = xml_input.downcast::<PyString>() {
+    if let Ok(xml_str) = xml_input.cast::<PyString>() {
         let text = xml_str.to_str()?;
         return parse_xml_with_reader(
             py,
@@ -222,7 +229,7 @@ fn parse(
         );
     }
 
-    if let Ok(xml_bytes) = xml_input.downcast::<PyBytes>() {
+    if let Ok(xml_bytes) = xml_input.cast::<PyBytes>() {
         return parse_xml_with_reader(
             py,
             xml_bytes.as_bytes(),
