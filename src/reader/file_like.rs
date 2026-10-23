@@ -37,9 +37,9 @@ impl Read for PyFileLikeRead {
                 Err(err) => return Err(pyerr_to_io(&err)),
             };
 
-            let bytes = if let Ok(chunk_bytes) = chunk.downcast::<PyBytes>() {
+            let bytes = if let Ok(chunk_bytes) = chunk.cast::<PyBytes>() {
                 chunk_bytes.as_bytes()
-            } else if let Ok(chunk_bytearray) = chunk.downcast::<PyByteArray>() {
+            } else if let Ok(chunk_bytearray) = chunk.cast::<PyByteArray>() {
                 self.bytearray_buffer = Some(chunk_bytearray.to_vec());
                 if let Some(bytes_ref) = self.bytearray_buffer.as_deref() {
                     bytes_ref
